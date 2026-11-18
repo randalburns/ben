@@ -98,7 +98,10 @@ def check_pimc_dds(required):
     backend = ctypes.string_at(lib.bga_dds_backend()).decode("utf-8", "replace")
 
     if not backend.startswith("error"):
-        report(OK, f"PIMC DDS backend: {backend}")
+        # BGADLL calls its DDS backend "haglund" whichever libdds it bound to:
+        # ddfast's (the default on Linux) or the old DDS 2.9 one.
+        library = native.dds_library or "library not preloaded"
+        report(OK, f"PIMC DDS backend: {backend} on {library}")
         return
 
     details = [

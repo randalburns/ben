@@ -83,6 +83,20 @@ def _tables_dir():
     return None
 
 
+# PIMC's DDS (ddfast's libdds.so, see ddfast_libdds) shares libddfast.so with this module and
+# loads the tables on its first solve if nothing has yet, from $DDFAST_TABLES. Set it for the
+# process so both find the same tables whichever solves first.
+if _tables_dir() and not os.getenv("DDFAST_TABLES"):
+    os.environ["DDFAST_TABLES"] = _tables_dir()
+
+
+def ddfast_libdds():
+    """Path of ddfast's libdds.so, DDS's C interface on ddfast (a drop-in libdds for BGADLL /
+    PIMC), beside the ddfast package; None if it was not built (Linux only so far)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), "libdds.so")
+    return path if sys.platform.startswith("linux") and os.path.isfile(path) else None
+
+
 _initialised = False
 
 

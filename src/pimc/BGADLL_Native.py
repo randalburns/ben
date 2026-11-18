@@ -48,10 +48,33 @@ def _find_native_lib():
 
 _lib_path = _find_native_lib()
 _lib = None
+# The DDS library BGADLL ended up with: "ddfast" or the path of the libdds preloaded.
+dds_library = None
+
+
+def _preload_ddfast_libdds():
+    """Preload ddfast's libdds.so (DDS's C interface on ddfast) so BGADLL's
+    [DllImport("dds")] binds to it: the loader matches the request to the library
+    already loaded under the soname libdds.so, and the old libdds beside BGADLL is
+    never opened. It shares libddfast.so (solver and tables) with BEN's DDSolver.
+    BEN_PIMC_DDS=haglund keeps the old DDS 2.9 library. Returns True if preloaded."""
+    global dds_library
+    if os.getenv('BEN_PIMC_DDS', '').lower() == 'haglund':
+        return False
+    try:
+        from ddsolver.ddsolver import ddfast_libdds
+    except ImportError:
+        return False
+    path = ddfast_libdds()
+    if path is None:
+        return False
+    ctypes.CDLL(path)
+    dds_library = "ddfast"
+    return True
 
 
 def _get_lib():
-    global _lib
+    global _lib, dds_library
     if _lib is None:
         if not os.path.isfile(_lib_path):
             raise FileNotFoundError(f"BGADLL native library not found: {_lib_path}")
@@ -67,6 +90,8 @@ def _get_lib():
                 if os.path.isfile(dds_path):
                     ctypes.WinDLL(dds_path)
                     break
+        elif _preload_ddfast_libdds():
+            pass
         else:
             # On Linux/macOS, preload dds library from next to BGADLL or bin/
             if sys.platform == 'darwin':
@@ -83,6 +108,7 @@ def _get_lib():
             for dds_path in candidates:
                 if os.path.isfile(dds_path):
                     ctypes.CDLL(dds_path)
+                    dds_library = dds_path
                     # BGADLL's [DllImport("dds")] resolves a platform-named file
                     # next to the assembly: libdds.so on Linux, libdds.dylib /
                     # dds.dylib on macOS. The vendored file may have a versioned

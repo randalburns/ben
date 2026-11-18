@@ -99,7 +99,7 @@ def check_pimc_dds(required):
 
     if not backend.startswith("error"):
         # BGADLL calls its DDS backend "haglund" whichever libdds it bound to:
-        # ddfast's (the default on Linux) or the old DDS 2.9 one.
+        # ddfast's (the default on Linux) or the vendored DDS one.
         library = native.dds_library or "library not preloaded"
         report(OK, f"PIMC DDS backend: {backend} on {library}")
         return

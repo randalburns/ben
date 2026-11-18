@@ -3,7 +3,7 @@
 This is a game engine for [bridge](https://en.wikipedia.org/wiki/Contract_bridge).
 It can be used as a robot player, to do analysis, or to develop AI for bridge.
 
-The engine is built using machine learning (neural networks) and the [double dummy solver](https://github.com/dds-bridge/dds), used through the `dds3` Python extension (see [src/ddsolver/README.md](src/ddsolver/README.md)).
+The engine is built using machine learning (neural networks) and a double dummy solver: [DDS](https://github.com/dds-bridge/dds) through its `dds3` Python extension, or on Linux optionally [ddfast](https://github.com/randalburns/ddfast) (see [src/ddsolver/README.md](src/ddsolver/README.md)).
 
 To get a first impression of how the engine plays, please take a look at the [demo](https://lorserker.github.io/ben/demo/demo.html), or watch the bridge streamer Peter Hollands [demo the robot](https://www.youtube.com/watch?v=onG_V7vwxUk&t=150s) on IntoBridge.
 
@@ -31,14 +31,19 @@ For __Mac M1/M2__ users: you need to install [Homebrew](https://brew.sh/) if you
 
 For __Ubuntu__ users: you might have to install libboost using `sudo apt install libboost-thread-dev`.
 
-> **Double-dummy solver:** BEN's double-dummy solver uses the `dds3` extension (DDS 3.0.0), not the old `dds.dll` / `libdds.so`. Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md). The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine.
+> **Double-dummy solver:** BEN runs its double-dummy solves on one of two backends:
+> - **dds3** (DDS 3.1, the default everywhere ddfast is not built). Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md).
+> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC uses ddfast's `libdds.so` too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
+>
+> `BEN_DDS=dds3` or `BEN_DDS=ddfast` forces BEN's backend, and `BEN_PIMC_DDS=haglund` keeps PIMC on the vendored DDS library; `preflight.py` reports which is in use. The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine. The Docker images and Windows builds use dds3. Details: [src/ddsolver/README.md](src/ddsolver/README.md).
 
 #### Running natively on Linux (including WSL)
 
 Docker users need to do nothing — the image is built on Ubuntu 24.04 / Python 3.12. For a **native** (non-Docker) Linux install, note that the vendored native libraries require:
 
 - **glibc ≥ 2.34** — i.e. Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+. `bin/dds3-linux/_dds3.so` itself needs only glibc 2.25; the 2.34 floor comes from `libEPBot.so` (BBA) and `BGADLL.so` (PIMC). On an older distro they fail to load with `version 'GLIBC_2.34' not found`.
-- **Python 3.12** — the `dds3` extension is locked to the CPython minor version.
+- **Python 3.12** — the `dds3` extension is locked to the CPython minor version (ddfast's module works on 3.12 and later).
+- **For ddfast:** an x86-64 CPU with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later), clang++ or g++ with C++20, and about 1.2 GB of memory for its tables.
 
 **WSL quick start (Ubuntu 24.04)** — the simplest way to run/test the Linux build outside Docker.
 

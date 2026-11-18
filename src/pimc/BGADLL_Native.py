@@ -57,7 +57,8 @@ def _preload_ddfast_libdds():
     [DllImport("dds")] binds to it: the loader matches the request to the library
     already loaded under the soname libdds.so, and the old libdds beside BGADLL is
     never opened. It shares libddfast.so (solver and tables) with BEN's DDSolver.
-    BEN_PIMC_DDS=haglund keeps the old DDS 2.9 library. Returns True if preloaded."""
+    BEN_PIMC_DDS=haglund keeps the vendored DDS library (3.1.0 on Linux). Returns
+    True if preloaded."""
     global dds_library
     if os.getenv('BEN_PIMC_DDS', '').lower() == 'haglund':
         return False

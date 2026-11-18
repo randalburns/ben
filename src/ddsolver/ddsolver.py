@@ -1,6 +1,19 @@
+"""BEN's double-dummy solver wrapper, on one of two backends:
+
+  ddfast  an exact double-dummy solver with DDS 3.x's dds3 interface, built from the
+          extern/ddfast submodule (Linux x86-64 with AVX-512; Python 3.12+).
+  dds3    DDS 3.1's Python extension, vendored per platform under bin/dds3-*.
+
+BEN_DDS=ddfast or BEN_DDS=dds3 picks one; unset, ddfast is used when it is built and dds3
+otherwise. Both return the same results (see ddsreplay.py); DDSolver.version() names the one
+in use. PIMC (BGADLL) chooses its own DDS library separately - see ddfast_libdds() and
+pimc/BGADLL_Native.py.
+"""
 import sys
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from collections import Counter
 from objects import Card
@@ -9,6 +22,10 @@ from nn.timing import ModelTimer
 from ddsolver.ddsrecorder import DDSRecorder
 
 init()
+
+
+# ---------------------------------------------------------------------------------------------
+# Finding the backends
 
 
 def _ddfast_python_dirs():
@@ -32,11 +49,8 @@ def _ddfast_python_dirs():
 
 
 def _load_ddfast():
-    """Import ddfast, an exact double-dummy solver with DDS 3.x's dds3 interface.
-
-    Tries a normal import first (ddfast installed), then the extern/ddfast
-    submodule, whose extension python/build.sh builds into python/ddfast/.
-    """
+    """Import ddfast: installed, else from the extern/ddfast submodule, whose
+    python/build.sh builds the extension into python/ddfast/."""
     last_error = None
     try:
         import ddfast
@@ -60,13 +74,106 @@ def _load_ddfast():
         "Build its Python extension from the extern/ddfast submodule:\n"
         "  git submodule update --init --recursive extern/ddfast\n"
         "  pip install nanobind\n"
-        "  sh extern/ddfast/python/build.sh      # -> extern/ddfast/python/ddfast/_ddfast.abi3.so\n"
+        "  sh extern/ddfast/python/build.sh\n"
         "The extension uses CPython's stable ABI (3.12 and later) and needs AVX-512 on x86-64.\n"
         f"\nUnderlying import error: {last_error!r}"
     ) from last_error
 
 
-ddfast = _load_ddfast()
+def _load_dds3():
+    """Import the dds3 extension (DDS 3.x Python interface).
+
+    Tries a normal import first (dds3 installed as a wheel). If that fails,
+    falls back to a copy vendored under BEN's bin/ directory.
+    """
+    # Keep the real failure around. A vendored _dds3.so that exists but won't
+    # load (e.g. built for a different Python version, or missing a dependent
+    # shared library) raises ImportError here; swallowing it hides the cause.
+    last_error = None
+    try:
+        import dds3
+        return dds3
+    except ImportError as ex:
+        last_error = ex
+
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    if sys.platform == "win32":
+        plat = "win"
+    elif sys.platform == "darwin":
+        plat = "darwin"
+    else:
+        plat = "linux"
+
+    # Look for a vendored dds3 under bin/, covering the layouts BEN runs in:
+    #   repo:              src/ddsolver/ddsolver.py -> <repo>/bin       (here/../..)
+    #   flattened (Docker): /app/ddsolver/ddsolver.py -> /app/bin       (here/..)
+    #   plus BEN_HOME/bin and <cwd>/bin as fallbacks.
+    bin_roots = [
+        os.path.join(os.path.abspath(os.path.join(here, "..", "..")), "bin"),
+        os.path.join(os.path.abspath(os.path.join(here, "..")), "bin"),
+    ]
+    if os.getenv("BEN_HOME"):
+        bin_roots.append(os.path.join(os.getenv("BEN_HOME"), "bin"))
+    bin_roots.append(os.path.join(os.getcwd(), "bin"))
+
+    seen = set()
+    for root in bin_roots:
+        for cand in (os.path.join(root, "dds3-" + plat),
+                     os.path.join(root, "dds3"),
+                     root):
+            if cand in seen:
+                continue
+            seen.add(cand)
+            if os.path.isdir(cand) and cand not in sys.path:
+                sys.path.insert(0, cand)
+            try:
+                import dds3
+                return dds3
+            except ImportError as ex:
+                last_error = ex
+                continue
+
+    raise ImportError(
+        "Could not import the 'dds3' extension (DDS 3.x Python interface).\n"
+        "Build it from the DDS repository and install or vendor it:\n"
+        "  bazel build -c opt //python:dds3_wheel_dist   # produces a wheel in dist/\n"
+        "  pip install dist/dds3-*.whl\n"
+        f"or place the built dds3 package in BEN's bin/dds3-{plat}/ directory.\n"
+        f"A _dds3.so built for a different Python than {sys.version_info.major}."
+        f"{sys.version_info.minor} will fail to load here.\n"
+        "See src/ddsolver/README.md.\n"
+        f"\nUnderlying import error: {last_error!r}"
+    ) from last_error
+
+
+# ddfast is looked for whatever BEN_DDS says: PIMC can use its libdds.so (ddfast_libdds)
+# even when BEN's own solves run on dds3.
+try:
+    ddfast = _load_ddfast()
+    _ddfast_error = None
+except ImportError as _ex:
+    ddfast = None
+    _ddfast_error = _ex
+
+
+def _choose_backend():
+    choice = (os.getenv("BEN_DDS") or "").strip().lower()
+    if choice not in ("", "ddfast", "dds3"):
+        raise ValueError(f"BEN_DDS={choice!r}: use 'ddfast' or 'dds3' (or leave it unset)")
+    if choice == "ddfast" and ddfast is None:
+        raise _ddfast_error
+    if choice == "dds3" or ddfast is None:
+        return "dds3"
+    return "ddfast"
+
+
+BACKEND = _choose_backend()
+dds3 = _load_dds3() if BACKEND == "dds3" else None
+
+
+# ---------------------------------------------------------------------------------------------
+# ddfast's tables, and its libdds.so for PIMC
 
 
 def _tables_dir():
@@ -76,6 +183,8 @@ def _tables_dir():
     BEN happened to be started."""
     if os.getenv("DDFAST_TABLES"):
         return os.getenv("DDFAST_TABLES")
+    if ddfast is None:
+        return None
     pkg = os.path.dirname(os.path.abspath(ddfast.__file__))       # <ddfast>/python/ddfast
     root = os.path.abspath(os.path.join(pkg, "..", ".."))
     if os.path.isdir(os.path.join(root, "python")) and os.path.isdir(os.path.join(root, "include")):
@@ -93,19 +202,21 @@ if _tables_dir() and not os.getenv("DDFAST_TABLES"):
 def ddfast_libdds():
     """Path of ddfast's libdds.so, DDS's C interface on ddfast (a drop-in libdds for BGADLL /
     PIMC), beside the ddfast package; None if it was not built (Linux only so far)."""
+    if ddfast is None:
+        return None
     path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), "libdds.so")
     return path if sys.platform.startswith("linux") and os.path.isfile(path) else None
 
 
-_initialised = False
+_tables_loaded = False
 
 
 def _ensure_tables(verbose):
     """Load the tables once per process (ddfast would otherwise do it on the first
     solve, inside a bid or a card play). The first run builds them, which takes a
     few minutes."""
-    global _initialised
-    if _initialised:
+    global _tables_loaded
+    if _tables_loaded:
         return
     tables = _tables_dir()
     if tables and not os.path.isdir(tables):
@@ -114,7 +225,11 @@ def _ensure_tables(verbose):
     elif verbose:
         sys.stderr.write(f"ddfast: loading the endgame tables from {tables or 'build/tables'}\n")
     ddfast.init(tables)
-    _initialised = True
+    _tables_loaded = True
+
+
+# ---------------------------------------------------------------------------------------------
+# Threads
 
 
 def _gevent_patched_threading():
@@ -125,31 +240,108 @@ def _gevent_patched_threading():
         return False
 
 
-# gameapi.py runs gevent's monkey.patch_all(). A ddfast call releases the GIL, but
-# made straight from a greenlet it would still hold up gevent's hub (every other
-# request) until the batch is solved. Under gevent the call runs on gevent's
-# native-thread pool instead, so the greenlet waits cooperatively.
+# gameapi.py runs gevent's monkey.patch_all(), which turns the threads of a
+# concurrent.futures pool into greenlets sharing one OS thread, and a native call made
+# straight from a greenlet holds up gevent's hub (every other request) until it returns.
+# Under gevent both backends run their calls on gevent's own executor, which always uses
+# native threads, so the greenlet waits cooperatively. (dds3 found by grand-slam-bridge,
+# PR #198: 200 deals took 13 s instead of 2 s on 8 cores.)
 _GEVENT = _gevent_patched_threading()
 if _GEVENT:
+    from gevent.monkey import get_original
     from gevent.threadpool import ThreadPoolExecutor as _NativeThreadPoolExecutor
+
+
+class _DDFastBackend:
+    """A batch is one solve_boards_pbn call: ddfast solves the boards on its own threads
+    with the GIL released once, and keeps its search state per thread by itself."""
+
+    def __init__(self, max_threads, verbose):
+        self.max_threads = max_threads if (max_threads and max_threads > 0) else 0
+        self.workers = self.max_threads or (os.cpu_count() or 4)
+        # Under gevent: a few native threads so concurrent requests can each have a
+        # batch in flight (each batch is itself spread over ddfast's threads).
+        self._gevent_pool = _NativeThreadPoolExecutor(max_workers=4) if _GEVENT else None
+        _ensure_tables(verbose)
+
+    def version(self):
+        return "ddfast"
+
+    def _call(self, fn, *args, **kwargs):
+        if self._gevent_pool is not None:
+            return self._gevent_pool.submit(fn, *args, **kwargs).result()
+        return fn(*args, **kwargs)
+
+    def solve_boards(self, hands_pbn, trump, first, trick_suit, trick_rank, solutions, mode):
+        return self._call(ddfast.solve_boards_pbn, hands_pbn, trump=trump, first=first,
+                          current_trick_suit=trick_suit, current_trick_rank=trick_rank,
+                          target=-1, solutions=solutions, mode=mode, max_threads=self.max_threads)
+
+    def par_table(self, deal, vulnerable):
+        return self._call(ddfast.calc_all_tables_pbn, [deal], mode=vulnerable,
+                          max_threads=self.max_threads)
+
+
+# dds3 (DDS 3.0+) removed internal multi-threading from the legacy batch API, so the modern
+# model is one SolverContext per worker thread: the backend runs a thread pool, and
+# solve_board_pbn releases the GIL during the solve, so the threads run concurrently. Each
+# pool thread keeps its own SolverContext - per OS thread, so under gevent the original
+# thread-local, not the patched per-greenlet one.
+_ctx_local = (get_original('_thread', '_local')() if _GEVENT else threading.local())
+
+
+def _thread_context():
+    ctx = getattr(_ctx_local, "ctx", None)
+    if ctx is None:
+        ctx = dds3.SolverContext()
+        _ctx_local.ctx = ctx
+    return ctx
+
+
+class _DDS3Backend:
+    """One solve_board_pbn call per board, on a Python thread pool with a SolverContext
+    (and so a warm transposition table) per thread."""
+
+    def __init__(self, max_threads, verbose):
+        self.workers = max_threads if (max_threads and max_threads > 0) else (os.cpu_count() or 4)
+        if _GEVENT:
+            self._pool = _NativeThreadPoolExecutor(max_workers=self.workers)
+        else:
+            self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dds")
+
+    def version(self):
+        return "dds3 3.1.0"
+
+    def solve_boards(self, hands_pbn, trump, first, trick_suit, trick_rank, solutions, mode):
+        def _solve_one(pbn):
+            return dds3.solve_board_pbn(pbn, trump=trump, first=first,
+                                        current_trick_suit=trick_suit, current_trick_rank=trick_rank,
+                                        target=-1, solutions=solutions, mode=mode,
+                                        context=_thread_context())
+        return list(self._pool.map(_solve_one, hands_pbn))
+
+    def par_table(self, deal, vulnerable):
+        return dds3.calc_all_tables_pbn([deal], mode=vulnerable)
+
+
+# ---------------------------------------------------------------------------------------------
 
 
 class DDSolver:
 
     # dds_mode is DDS's `mode`: 1 (the default) always searches for the score, even
-    # when the hand to play has only one card (with its equivalents) to play.
-    # ddfast keeps its search state per thread and reuses it by itself, so DDS's
-    # transposition-table reuse behind the mode needs no context here.
+    # when the hand to play has only one card (with its equivalents) to play. dds3
+    # reuses its transposition table between calls (same trump, the same or nearly
+    # the same cards); ddfast keeps its search state per thread and reuses it itself.
 
     def __init__(self, dds_mode=1, max_threads=0, verbose=False):
         self.dds_mode = dds_mode
-        # max_threads: threads ddfast solves a batch on. 0 = one per CPU.
-        self._max_threads = max_threads if (max_threads and max_threads > 0) else 0
-        self._workers = self._max_threads or (os.cpu_count() or 4)
-        # Under gevent: a few native threads so concurrent requests can each have
-        # a batch in flight (each batch is itself spread over ddfast's threads).
-        self._gevent_pool = _NativeThreadPoolExecutor(max_workers=4) if _GEVENT else None
-        _ensure_tables(verbose)
+        # max_threads: threads a batch is solved on. 0 = one per CPU.
+        if BACKEND == "ddfast":
+            self._backend = _DDFastBackend(max_threads, verbose)
+        else:
+            self._backend = _DDS3Backend(max_threads, verbose)
+        self._workers = self._backend.workers
         if verbose:
             sys.stderr.write(f"DDSolver loaded — {self.version()} - dds mode {dds_mode} - {self._workers} solver threads"
                              f"{' (native threads under gevent)' if _GEVENT else ''}\n")
@@ -160,12 +352,7 @@ class DDSolver:
                               threads=self._workers)
 
     def version(self):
-        return "ddfast"
-
-    def _call(self, fn, *args, **kwargs):
-        if self._gevent_pool is not None:
-            return self._gevent_pool.submit(fn, *args, **kwargs).result()
-        return fn(*args, **kwargs)
+        return self._backend.version()
 
     def calculatepar(self, hand, vuln, print_result=True):
         with ModelTimer.time_call('dds_par'):
@@ -184,14 +371,13 @@ class DDSolver:
         if vuln[1]: v = 3
         if vuln[0] and vuln[1]: v = 1
 
-        # Callers pass the deal both with and without the "N:" prefix. dds3 accepted
+        # Callers pass the deal both with and without the "N:" prefix. dds3 accepts
         # a doubled "N:N:..."; ddfast rejects it as a PBN error.
         deal = hand if hand[:2].upper() in ("N:", "E:", "S:", "W:") else "N:" + hand
 
         # calc_all_tables_pbn computes the DD table and (mode != -1) the par score.
         try:
-            result = self._call(ddfast.calc_all_tables_pbn, [deal], mode=v,
-                                max_threads=self._max_threads)
+            result = self._backend.par_table(deal, v)
         except Exception as e:
             sys.stderr.write(f"Error calculating par: {e}, Hand {hand.encode('utf-8')}\n")
             raise
@@ -259,21 +445,9 @@ class DDSolver:
             trick_suit[i] = current_trick[i] // 13
             trick_rank[i] = 14 - current_trick[i] % 13
 
-        # One call per batch: ddfast solves the boards on its own threads with the
-        # GIL released once.
         try:
-            solved = self._call(
-                ddfast.solve_boards_pbn,
-                list(hands_pbn),
-                trump=trump,
-                first=leader_i,
-                current_trick_suit=tuple(trick_suit),
-                current_trick_rank=tuple(trick_rank),
-                target=-1,
-                solutions=solutions,
-                mode=self.dds_mode,
-                max_threads=self._max_threads,
-            )
+            solved = self._backend.solve_boards(list(hands_pbn), trump, leader_i, tuple(trick_suit),
+                                                tuple(trick_rank), solutions, self.dds_mode)
         except Exception as e:
             print(f"{Fore.RED}DDS error: {e} {hands_pbn[0].encode('utf-8')} {current_trick} {leader_i}{Style.RESET_ALL}")
             return None

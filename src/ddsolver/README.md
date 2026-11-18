@@ -1,11 +1,95 @@
-# DDS solver (`ddsolver`)
+# Double-dummy solver (`ddsolver`)
 
-BEN's double-dummy solver wrapper. Since the DDS **3.0.0** upgrade this uses the
-`dds3` Python extension instead of the old `ctypes`-loaded `dds.dll` / `libdds.so`.
-The vendored extensions in `bin/dds3-*` are built from the DDS **v3.1.0** tag
-(`fe6a6581`).
+BEN's double-dummy solver wrapper, `DDSolver`, runs on one of two backends:
 
-## What changed
+| Backend | What it is | Platforms | Speed on BEN's workload |
+|---------|------------|-----------|-------------------------|
+| **ddfast** | An exact double-dummy solver with DDS 3.x's `dds3` Python interface, built from the `extern/ddfast` submodule ([randalburns/ddfast](https://github.com/randalburns/ddfast), branch `dds-capi`) | Linux x86-64 with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later); Python 3.12+ | about 4× dds3 |
+| **dds3** | DDS 3.1's Python extension, vendored per platform under `bin/dds3-*` (built from the DDS **v3.1.0** tag, `fe6a6581`) | Windows, Linux, macOS; Python 3.12 only | baseline |
+
+Both return the same results: a 559-call recording of a real 8-board session
+(41,944 deals plus par) replays identically on both (see
+[Benchmarking](#benchmarking-record-a-real-session-replay-it)), taking 6.4 s on
+ddfast and 29.7 s on dds3 (24 threads). By purpose: card play 6×, bidding 3.8×,
+opening leads 3.7×, claim checks 10×, par 2×.
+
+`DDSolver`'s public API (`solve`, `calculatepar`, `version`,
+`expected_tricks_dds`, ...) is the same on both, so callers do not care which
+one runs.
+
+## Choosing the backend
+
+```bash
+BEN_DDS=ddfast   # ddfast; fails at import if it is not built
+BEN_DDS=dds3     # the vendored dds3
+                 # unset: ddfast if it is built, else dds3
+```
+
+`DDSolver(...).version()` says which one is in use (`ddfast` or `dds3 3.1.0`),
+and so do `preflight.py` (`double dummy solver: ...`) and the header of a
+`--ddsrecord` recording.
+
+PIMC (BGADLL) picks its DDS library separately, with `BEN_PIMC_DDS`: see
+[The DDS C library used by PIMC](#the-dds-c-library-used-by-pimc-bgadll).
+
+The Docker images and the Windows PyInstaller builds only ship dds3 (they do not
+build the submodule), so they run on dds3.
+
+## Using ddfast
+
+### Build it
+
+```bash
+git submodule update --init --recursive extern/ddfast   # ddfast and its extern/dds
+pip install nanobind                                     # in BEN's Python environment
+sh extern/ddfast/python/build.sh                         # uses $PYTHON, default python3
+```
+
+`build.sh` compiles for the build machine's CPU (`-march=native`) with clang++
+(or g++) and writes three libraries to `extern/ddfast/python/ddfast/`:
+
+| File | What |
+|------|------|
+| `libddfast.so` | the solver, the endgame tables, the thread pool and the DDS-compatible layer |
+| `_ddfast.abi3.so` | the Python module (CPython's stable ABI, so any Python 3.12+), linked against `libddfast.so` |
+| `libdds.so` | DDS's C interface (`SolveBoardPBN`, ...) on `libddfast.so`, for PIMC |
+
+`ddsolver.py` finds the package in the submodule (or an installed `ddfast`);
+nothing needs to be added to `PYTHONPATH`.
+
+### The endgame tables
+
+ddfast needs endgame tables: about 1.1 GB on disk and 1.2 GB in memory. They are
+built the first time ddfast runs, which takes about 3 minutes on all cores and
+briefly uses up to about 5 GB of memory; after that they load at startup.
+`DDSolver` loads them once per process from `$DDFAST_TABLES`, else
+`extern/ddfast/build/tables` (gitignored in the submodule). To build them ahead
+of time:
+
+```bash
+python -c "import sys; sys.path.insert(0, 'extern/ddfast/python'); import ddfast; ddfast.init('extern/ddfast/build/tables')"
+```
+
+### How DDSolver drives it
+
+A batch of sampled deals is one `ddfast.solve_boards_pbn` call: ddfast solves the
+deals on its own threads (`max_threads`, `[dds] dds_max_threads`, 0 = all CPUs)
+with the GIL released once, and keeps its search state per thread itself, so no
+Python thread pool or `SolverContext` is involved. Under gevent (`gameapi.py`)
+the call runs on gevent's native-thread pool so the hub keeps serving other
+requests.
+
+Differences from dds3 that BEN does not see: `nodes` is always 0; with
+`solutions=1` the reported card may be another equally good one, and cards with
+equal scores may come in another order (BEN keys results by card and uses only
+the scores). One difference it does see: ddfast rejects a doubled deal prefix
+(`"N:N:..."`, which dds3 accepts), so `calculatepar` only adds `N:` when the deal
+has none.
+
+## dds3
+
+Since the DDS **3.0.0** upgrade, the dds3 backend uses the `dds3` Python
+extension instead of the old `ctypes`-loaded `dds.dll` / `libdds.so`.
 
 | Before (DDS 2.9.x)                         | Now (DDS 3.0.0)                             |
 |--------------------------------------------|---------------------------------------------|
@@ -14,15 +98,12 @@ The vendored extensions in `bin/dds3-*` are built from the DDS **v3.1.0** tag
 | `DDSSolver` (ddss fast-fork) + fallback    | removed — single `DDSolver` class            |
 | `bin/ddss.dll` / `.exp` / `.lib`           | removed (ddss fast-fork dropped)              |
 
-`DDSolver` keeps the same public API (`solve`, `calculatepar`, `version`,
-`expected_tricks_dds`, ...), so callers did not change.
-
 > **Note:** `bin/dds.dll`, `bin/libdds.so` and `bin/darwin/libdds.2.9.0.dylib`
-> are **kept** — they are not used by `ddsolver` anymore, but the BGADLL / PIMC
-> native engine (`src/pimc/BGADLL_Native.py`) still P/Invokes the DDS C ABI and
-> preloads them. See [The DDS C library used by PIMC](#the-dds-c-library-used-by-pimc-bgadll).
+> are **kept** — they are not used by `ddsolver`, but the BGADLL / PIMC
+> native engine (`src/pimc/BGADLL_Native.py`) calls the DDS C ABI and
+> may preload them. See [The DDS C library used by PIMC](#the-dds-c-library-used-by-pimc-bgadll).
 
-**Concurrency.** `DDSolver` runs a Python `ThreadPoolExecutor` and issues one
+**Concurrency.** On dds3, `DDSolver` runs a Python `ThreadPoolExecutor` and issues one
 `dds3.solve_board_pbn(..., context=ctx)` per board, keeping **one `SolverContext`
 per worker thread** — the modern DDS 3.x model (internal batch threading was
 removed). `solve_board_pbn` releases the GIL during the search, so the pool runs
@@ -35,7 +116,7 @@ The deprecated `set_max_threads` / `solve_all_boards` bindings are **not** used
 `dds3` is a compiled extension and must be built per platform from the DDS
 repository (https://github.com/dds-bridge/dds). It is **not** on PyPI.
 
-### Build it
+### Build dds3
 
 ```bash
 # The DDS repo uses bazelisk (the `bazel` launcher); `bazel` may not be on PATH.
@@ -119,7 +200,7 @@ See `docs/python_interface.md` in the DDS repo for per-OS prerequisites
 
 ### Make it importable — two options
 
-`ddsolver.py` imports `dds3` and finds it either way:
+When dds3 is the backend, `ddsolver.py` imports it and finds it either way:
 
 1. **pip install (recommended)** — install the built wheel into BEN's Python
    environment:
@@ -142,9 +223,46 @@ list it under `hiddenimports`).
 
 ## The DDS C library used by PIMC (BGADLL)
 
-BGADLL (PIMC / PIMCDef) does not use `dds3`. On every platform except Windows
-x64 (which uses `libbcalcdds.dll`) it calls the DDS **C ABI** (`SolveBoardPBN`)
-from a native library next to it:
+BGADLL (PIMC / PIMCDef) does not use `DDSolver`'s backend. On every platform
+except Windows x64 (which uses `libbcalcdds.dll`) it calls the DDS **C ABI**
+(`SolveBoardPBN`, `SetMaxThreads`, `ErrorMessage`) from a library it loads by
+name (`[DllImport("dds")]`): `libdds.so` on Linux. `BGADLL_Native.py` preloads
+that library before BGADLL, and BGADLL binds to the one already loaded.
+
+### ddfast's libdds.so (Linux, the default when built)
+
+When `extern/ddfast/python/ddfast/libdds.so` is built (see
+[Using ddfast](#using-ddfast)), BEN preloads it in place of the vendored file, so
+PIMC solves on ddfast too:
+
+```bash
+BEN_PIMC_DDS=haglund   # keep the vendored DDS library below instead
+                       # unset: ddfast's libdds.so if it is built
+```
+
+This is independent of `BEN_DDS`: with `BEN_DDS=dds3`, PIMC still uses ddfast's
+library unless `BEN_PIMC_DDS=haglund`. `preflight.py` shows which one PIMC got:
+`PIMC DDS backend: haglund on ddfast` or `... on <path of the vendored libdds>`
+("haglund" is BGADLL's name for its DDS backend, whichever library provides it).
+
+`libdds.so` shares `libddfast.so` with ddfast's Python module, so one process
+holds one copy of the tables. `ddsolver.py` sets `DDFAST_TABLES` for the process
+so both find the same tables whichever solves first. The library accepts any
+thread index: ddfast keeps its search state per OS thread, so BGADLL's indexes
+0–7 need no `SetMaxThreads`.
+
+It agrees with the vendored DDS 3.1.0 library on 36,000 calls
+(`extern/ddfast/python/tests/test_dds_capi.py`: random positions at every stage
+of play, solutions 1–3, targets, modes, single-threaded and from 8 threads), and
+PIMC's output on `src/test_pimc_native.py`'s position is identical on both. On
+an 8-board session PIMC's time fell 28% (30.5 s to 22.0 s): each PIMC call also
+spends time in BGADLL's own sampling and bookkeeping, which ddfast does not
+change.
+
+macOS and Windows have no ddfast build, so there PIMC always uses the vendored
+library.
+
+### The vendored libraries
 
 | Platform       | File                                   | DDS   |
 |----------------|----------------------------------------|-------|
@@ -256,10 +374,22 @@ what was recorded, so it can be used as a CI check that a DDS change is
 behaviour-preserving.
 
 Replay calls `solve_helper` / `_calculatepar_impl` rather than the public
-`solve` / `calculatepar`, so it measures DDS itself and never re-triggers the
-recorder.
+`solve` / `calculatepar`, so it measures the solver itself and never re-triggers
+the recorder.
 
-**On repeatability:** with `dds_mode=1` DDS reuses a transposition table across
+**Comparing the backends:** replay the same recording under each:
+
+```bash
+BEN_DDS=dds3   python src/ddsolver/ddsreplay.py rec.jsonl --warmup --repeat 3
+BEN_DDS=ddfast python src/ddsolver/ddsreplay.py rec.jsonl --warmup --repeat 3
+```
+
+The report's `replaying:` line names the backend. Both should report
+`VERIFY: all ... calls returned the recorded result`, whichever backend made the
+recording.
+
+**On repeatability:** with `dds_mode=1` dds3 reuses a transposition table across
 consecutive solves on the same `SolverContext`, and the thread pool assigns
-boards to contexts nondeterministically, so a single run carries a few percent
-of noise. Use `--repeat` (the best run is reported) and `--warmup`.
+boards to contexts nondeterministically (ddfast likewise keeps a table per
+thread), so a single run carries a few percent of noise. Use `--repeat` (the
+best run is reported) and `--warmup`.

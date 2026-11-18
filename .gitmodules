@@ -1,0 +1,4 @@
+[submodule "extern/ddfast"]
+	path = extern/ddfast
+	url = https://github.com/randalburns/ddfast.git
+	branch = python

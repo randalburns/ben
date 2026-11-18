@@ -50,26 +50,26 @@ def check_python():
         )
 
 
-def check_dds3():
-    """The dds3 extension is a compiled CPython extension, locked to one Python
-    version. This is the check that catches 'ran it with the wrong python3'."""
+def check_ddfast():
+    """ddfast (the double dummy solver) is a compiled extension built from the
+    extern/ddfast submodule. This catches a missing build, a Python older than
+    3.12 (its stable-ABI floor) or a CPU without AVX-512."""
     try:
         from ddsolver.ddsolver import DDSolver
     except ImportError as ex:
         report(
             FAIL,
-            "dds3 (double dummy solver) will not import",
+            "ddfast (double dummy solver) will not import",
             f"Running: {sys.executable} ({sys.version.split()[0]})",
-            "A compiled extension only loads under the Python version it was built for.",
-            "Either start BEN with the matching interpreter (the repo venv is the",
-            "intended one) or rebuild the extension - see src/ddsolver/README.md.",
+            "Build it from the submodule: sh extern/ddfast/python/build.sh",
+            "(needs nanobind and Python 3.12 or later) - see src/ddsolver/README.md.",
             "",
             f"Underlying error: {ex}".split("\n")[0],
         )
         return None
 
     solver = DDSolver(max_threads=1)
-    report(OK, f"dds3 {solver.version()}")
+    report(OK, f"double dummy solver: {solver.version()}")
     return solver
 
 
@@ -147,7 +147,7 @@ def main():
     print("-" * 60)
 
     check_python()
-    check_dds3()
+    check_ddfast()
     check_pimc_dds(required=pimc_required(args.config))
 
     print("-" * 60)

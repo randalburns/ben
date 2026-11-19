@@ -198,6 +198,14 @@ def _tables_dir():
 if _tables_dir() and not os.getenv("DDFAST_TABLES"):
     os.environ["DDFAST_TABLES"] = _tables_dir()
 
+# The table files (about 1.1 GB) are mapped read-only rather than read into each process, so all
+# BEN servers and other ddfast users on a machine share one copy. DDFAST_TABLE_MAP=0 (or empty)
+# reads them in instead, ddfast's own default and faster to search on Linux's huge pages. Set
+# for the process so PIMC's libdds, which shares the tables, maps them too if it loads first.
+if os.getenv("DDFAST_TABLE_MAP") is None:
+    os.environ["DDFAST_TABLE_MAP"] = "1"
+MAP_TABLES = os.environ["DDFAST_TABLE_MAP"] not in ("", "0")
+
 
 def ddfast_libdds():
     """Path of ddfast's libdds.so, DDS's C interface on ddfast (a drop-in libdds for BGADLL /
@@ -232,8 +240,8 @@ def _ensure_tables(verbose):
         sys.stderr.write(f"{Fore.YELLOW}ddfast: building the endgame tables in {tables} "
                          f"(once; a few minutes, about 1.1 GB){Style.RESET_ALL}\n")
     elif verbose:
-        sys.stderr.write(f"ddfast: loading the endgame tables from {tables or 'build/tables'}\n")
-    ddfast.init(tables)
+        sys.stderr.write(f"ddfast: {'mapping' if MAP_TABLES else 'loading'} the endgame tables from {tables or 'build/tables'}\n")
+    ddfast.init(tables, map_tables=MAP_TABLES)
     _tables_loaded = True
 
 

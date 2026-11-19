@@ -100,9 +100,12 @@ _GPU_CHUNK_VALUES = int(os.getenv('BEN_ONNX_GPU_CHUNK', 8_000_000))
 #           (bounded by the chunking above), not the sum over 16 models, and
 #           no run pays for giving memory back.
 #   shrink  an arena per session, shrunk after every run (1.3-1.8x slower).
+#   large   an arena per session, shrunk after runs of more than
+#           BEN_ONNX_GPU_SHRINK_VALUES input values (default 1,000,000).
 _GPU_ARENA = os.getenv('BEN_ONNX_GPU_ARENA', 'shared').strip().lower()
-if _GPU_ARENA not in ('shared', 'shrink'):
-    raise ValueError(f"BEN_ONNX_GPU_ARENA={_GPU_ARENA!r}: use 'shared' or 'shrink'")
+if _GPU_ARENA not in ('shared', 'shrink', 'large'):
+    raise ValueError(f"BEN_ONNX_GPU_ARENA={_GPU_ARENA!r}: use 'shared', 'shrink' or 'large'")
+_SHRINK_ABOVE = {'shrink': 0, 'large': int(os.getenv('BEN_ONNX_GPU_SHRINK_VALUES', 1_000_000))}
 
 _shared_arena = None
 
@@ -127,26 +130,25 @@ def _register_shared_arena():
 
 class _ChunkedSession:
     """An InferenceSession on the GPU whose run() splits large batches into row
-    chunks and, with per-session arenas, gives its GPU memory back afterwards."""
+    chunks and, with per-session arenas, gives its GPU memory back after runs
+    of more than shrink_above input values (0: after every run; None: never)."""
 
-    def __init__(self, session, max_values, shrink):
+    def __init__(self, session, max_values, shrink_above):
         self._session = session
         self._max_values = max_values
-        self._run_options = None
-        if shrink:
-            self._run_options = ort.RunOptions()
-            self._run_options.add_run_config_entry('memory.enable_memory_arena_shrinkage', 'gpu:0')
+        self._shrink_above = shrink_above
+        self._shrink = ort.RunOptions()
+        self._shrink.add_run_config_entry('memory.enable_memory_arena_shrinkage', 'gpu:0')
 
     def __getattr__(self, name):
         return getattr(self._session, name)
 
     def run(self, output_names, input_feed, run_options=None):
-        return self._run(output_names, input_feed, run_options or self._run_options)
-
-    def _run(self, output_names, input_feed, run_options):
         arrays = list(input_feed.values())
         rows = arrays[0].shape[0] if arrays and getattr(arrays[0], 'ndim', 0) else 0
         per_row = sum(a.size // max(1, a.shape[0]) for a in arrays) if rows else 0
+        if run_options is None and self._shrink_above is not None and per_row * rows > self._shrink_above:
+            run_options = self._shrink
         if rows <= 1 or per_row * rows <= self._max_values:
             return self._session.run(output_names, input_feed, run_options)
         step = max(1, self._max_values // per_row)
@@ -205,7 +207,8 @@ def _new_session(source, label):
             session = ort.InferenceSession(source, options,
                                            providers=[('CUDAExecutionProvider', _CUDA_OPTIONS),
                                                       'CPUExecutionProvider'])
-            return _ChunkedSession(session, _GPU_CHUNK_VALUES, shrink=not shared)
+            shrink_above = None if shared else _SHRINK_ABOVE.get(_GPU_ARENA, 0)
+            return _ChunkedSession(session, _GPU_CHUNK_VALUES, shrink_above)
         except Exception as ex:
             sys.stderr.write(f"ONNX Runtime: CUDA session for {label} failed ({ex}); using the CPU\n")
     return ort.InferenceSession(source, get_session_options(),

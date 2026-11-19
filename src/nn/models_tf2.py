@@ -57,10 +57,33 @@ def BatchPlayer(name, model_path):
     return BatchPlayerTF(name, model_path)
 
 
+# [models] bidding_runtime = onnx runs .keras bidder and bid info models on ONNX
+# Runtime: they are LSTM stacks, which nn/lstm_onnx.py rebuilds in memory as ONNX
+# graphs with native LSTM nodes (checked against the Keras model at load time).
+# On the GPU that is several times faster than TensorFlow for BEN's call sizes.
+# Set by Models.from_conf; 'keras' (the default) keeps TensorFlow.
+_bidding_runtime = 'keras'
+
+
+def _keras_on_onnx(model_path, kind, make):
+    """make() - an ONNX wrapper of a .keras bidding model - or None to use TensorFlow."""
+    if _bidding_runtime != 'onnx' or not model_path.endswith('.keras'):
+        return None
+    try:
+        return make()
+    except Exception as ex:
+        sys.stderr.write(f"bidding_runtime = onnx: {kind} {os.path.basename(model_path)} stays on "
+                         f"TensorFlow ({type(ex).__name__}: {ex})\n")
+        return None
+
+
 def BidInfo(model_path):
     """Auto-select BidInfo implementation based on file extension"""
     if model_path.endswith('.onnx'):
         return _get_onnx_module('BidInfo')(model_path)
+    onnx_model = _keras_on_onnx(model_path, 'bid info', lambda: _get_onnx_module('BidInfo')(model_path))
+    if onnx_model is not None:
+        return onnx_model
     return BidInfoTF(model_path)
 
 
@@ -82,6 +105,11 @@ def Bidder(name, model_path, alert_supported):
     """Auto-select Bidder implementation based on file extension"""
     if model_path.endswith('.onnx'):
         return _get_onnx_module('Bidder')(name, model_path, alert_supported)
+    if not alert_supported:  # the ONNX graph has no alert output
+        onnx_model = _keras_on_onnx(model_path, 'bidder',
+                                    lambda: _get_onnx_module('Bidder')(name, model_path, alert_supported))
+        if onnx_model is not None:
+            return onnx_model
     return BidderTF(name, model_path, alert_supported)
 
 
@@ -291,6 +319,10 @@ class Models:
         n_cards_play = conf.getint('models', 'n_cards_play', fallback=32)
         alert_supported = conf.getboolean('bidding', 'alert_supported', fallback=False)
         alert_threshold = conf.getfloat('bidding', 'alert_threshold', fallback=0.5)
+        global _bidding_runtime
+        _bidding_runtime = conf.get('models', 'bidding_runtime', fallback='keras').strip().lower()
+        if _bidding_runtime not in ('keras', 'onnx'):
+            raise ValueError(f"[models] bidding_runtime = {_bidding_runtime!r}: use 'keras' or 'onnx'")
 
         search_threshold_str = conf.get('bidding', 'search_threshold', fallback=-1)
         # Check if the value is a list (with brackets), otherwise treat it as a single float

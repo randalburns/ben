@@ -36,6 +36,16 @@ os.environ.setdefault('TF_FORCE_GPU_ALLOW_GROWTH', 'true')
 # cache is too small to hold them, so they would be recompiled run after run.
 os.environ.setdefault('CUDA_CACHE_MAXSIZE', str(4 << 30))
 
+# Full float32 on the GPU. TensorFlow (like ONNX Runtime) runs float32 matmuls
+# and cuDNN LSTMs in TF32 on Ampere and newer GPUs, keeping 10 bits of mantissa:
+# bid scores then differ from the CPU's by ~5e-4, enough for 3 of 8 test boards
+# to be bid or played differently. NVIDIA_TF32_OVERRIDE=0 makes cuBLAS and cuDNN
+# skip TF32 for everything in the process; it is read when they start, after
+# this module is imported. BEN_TF32=1 keeps TF32 (a little faster, see
+# nn/onnx_config.py for ONNX Runtime's setting).
+if os.environ.get('BEN_TF32') != '1':
+    os.environ.setdefault('NVIDIA_TF32_OVERRIDE', '0')
+
 
 def _preload_cusolver():
     """tensorflow[and-cuda] installs the CUDA libraries as pip packages, and

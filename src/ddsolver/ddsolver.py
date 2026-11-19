@@ -217,12 +217,14 @@ def ddfast_libdds():
 
 
 def ddfast_libddfast():
-    """Path of ddfast's libddfast.so (the solver and tables, shared by ddfast's Python module,
-    its libdds.so and the C++ BGADLL), beside the ddfast package; None if not built."""
-    if ddfast is None:
+    """Path of ddfast's libddfast.so (libddfast.dylib on macOS): the solver and tables, shared
+    by ddfast's Python module, its libdds and the C++ BGADLL, beside the ddfast package; None
+    if not built."""
+    if ddfast is None or sys.platform == "win32":
         return None
-    path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), "libddfast.so")
-    return path if sys.platform.startswith("linux") and os.path.isfile(path) else None
+    name = "libddfast.dylib" if sys.platform == "darwin" else "libddfast.so"
+    path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), name)
+    return path if os.path.isfile(path) else None
 
 
 _tables_loaded = False

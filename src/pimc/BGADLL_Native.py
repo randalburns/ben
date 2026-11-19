@@ -4,7 +4,7 @@ classes (PIMC, PIMCDef, Hand, Play, Card, Constraints, Extensions, Macros)
 so that PIMC.py and PIMCDef.py can work on all platforms without pythonnet.
 
 Two engines have the same C ABI (the bga_* functions):
-  cpp     the C++ port (extern/BGA/BGADLL.Cpp, Linux), solving on ddfast
+  cpp     the C++ port (extern/BGA/BGADLL.Cpp, Linux and macOS), solving on ddfast
   csharp  BGADLL.Native (NativeAOT C#) under bin/BGA, solving on a libdds
 BEN_BGADLL=cpp|csharp picks one; unset, the C++ port if it is built.
 """
@@ -54,8 +54,13 @@ def _find_native_lib():
 def _find_cpp_lib():
     """The C++ port of BGADLL (extern/BGA, branch cpp-ddfast-port, built by
     BGADLL.Cpp/build.sh): the same C ABI as the C# library, with ddfast as its
-    double-dummy solver. Linux only; None if it is not built."""
-    if not sys.platform.startswith('linux'):
+    double-dummy solver. Linux (BGADLL.so) and macOS (BGADLL.dylib); None if it is
+    not built."""
+    if sys.platform == 'darwin':
+        lib_name = 'BGADLL.dylib'
+    elif sys.platform.startswith('linux'):
+        lib_name = 'BGADLL.so'
+    else:
         return None
     script_dir = os.path.dirname(os.path.abspath(__file__))
     roots = [os.path.abspath(os.path.join(script_dir, '..', '..')),   # repo: src/pimc -> <repo>
@@ -63,7 +68,7 @@ def _find_cpp_lib():
     if os.getenv('BEN_HOME'):
         roots.append(os.getenv('BEN_HOME'))
     for root in roots:
-        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', 'BGADLL.so')
+        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', lib_name)
         if os.path.isfile(path):
             return path
     return None
@@ -77,7 +82,7 @@ def _choose_engine():
         raise ValueError(f"BEN_BGADLL={choice!r}: use 'cpp' or 'csharp' (or leave it unset)")
     cpp = _find_cpp_lib()
     if choice == 'cpp' and cpp is None:
-        raise FileNotFoundError("BEN_BGADLL=cpp but extern/BGA/BGADLL.Cpp/bin/BGADLL.so is not built "
+        raise FileNotFoundError("BEN_BGADLL=cpp but extern/BGA/BGADLL.Cpp/bin/BGADLL.so (.dylib on macOS) is not built "
                                 "(git submodule update --init extern/BGA; sh extern/BGA/BGADLL.Cpp/build.sh)")
     if choice != 'csharp' and cpp is not None:
         return 'cpp', cpp
@@ -114,7 +119,11 @@ def _preload_ddfast_libdds():
 
 
 def _vendored_libdds():
-    """The DDS library shipped beside the C# BGADLL (DDS 3.1.0 on Linux x64)."""
+    """The DDS library shipped beside the C# BGADLL (DDS 3.1.0 on Linux x64, DDS 2.9.0 on
+    macOS arm64)."""
+    if sys.platform == 'darwin':
+        path = os.path.join(os.path.dirname(os.path.abspath(_find_native_lib())), 'libdds.2.9.0.dylib')
+        return path if os.path.isfile(path) else None
     machine = platform.machine().lower()
     arch = 'arm64' if machine in ('aarch64', 'arm64') else 'x64'
     path = os.path.join(os.path.dirname(os.path.abspath(_find_native_lib())), '..', arch, 'libdds.so')

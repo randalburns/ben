@@ -5,7 +5,7 @@ Drop-in replacement for bidder_tf2.py with faster inference.
 
 import numpy as np
 from nn.timing import ModelTimer
-from nn.onnx_config import create_session
+from nn.onnx_config import create_session, input_dtype
 
 
 class Bidder:
@@ -17,6 +17,8 @@ class Bidder:
         self.model_path = model_path
         self.session = create_session(model_path)
         self.input_name = self.session.get_inputs()[0].name
+        # float16 for the native-LSTM graphs, which take BEN's float16 inputs as they are
+        self.input_dtype = input_dtype(self.session)
 
     def pred_fun_seq(self, x):
         """
@@ -30,7 +32,7 @@ class Bidder:
             alerts: 0 (alert not supported in ONNX version)
         """
         with ModelTimer.time_call('bidder'):
-            x_input = np.asarray(x, dtype=np.float32)
+            x_input = np.asarray(x, dtype=self.input_dtype)
             result = self.session.run(None, {self.input_name: x_input})
             bids = result[0]
         # Alert model not included in ONNX conversion

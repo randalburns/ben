@@ -4,7 +4,7 @@ classes (PIMC, PIMCDef, Hand, Play, Card, Constraints, Extensions, Macros)
 so that PIMC.py and PIMCDef.py can work on all platforms without pythonnet.
 
 Two engines have the same C ABI (the bga_* functions):
-  cpp     the C++ port (extern/BGA/BGADLL.Cpp, Linux and macOS), solving on ddfast
+  cpp     the C++ port (extern/bgadll-cpp, Linux and macOS), solving on ddfast
   csharp  BGADLL.Native (NativeAOT C#) under bin/BGA, solving on a libdds
 BEN_BGADLL=cpp|csharp picks one; unset, the C++ port if it is built.
 """
@@ -52,8 +52,8 @@ def _find_native_lib():
 
 
 def _find_cpp_lib():
-    """The C++ port of BGADLL (extern/BGA/BGADLL.Cpp, randalburns/bgadll-cpp, built by
-    BGADLL.Cpp/build.sh): the same C ABI as the C# library, with ddfast as its
+    """The C++ port of BGADLL (extern/bgadll-cpp, randalburns/bgadll-cpp, built by
+    extern/bgadll-cpp/build.sh): the same C ABI as the C# library, with ddfast as its
     double-dummy solver. Linux (BGADLL.so) and macOS (BGADLL.dylib); None if it is
     not built."""
     if sys.platform == 'darwin':
@@ -68,7 +68,7 @@ def _find_cpp_lib():
     if os.getenv('BEN_HOME'):
         roots.append(os.getenv('BEN_HOME'))
     for root in roots:
-        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', lib_name)
+        path = os.path.join(root, 'extern', 'bgadll-cpp', 'bin', lib_name)
         if os.path.isfile(path):
             return path
     return None
@@ -82,8 +82,8 @@ def _choose_engine():
         raise ValueError(f"BEN_BGADLL={choice!r}: use 'cpp' or 'csharp' (or leave it unset)")
     cpp = _find_cpp_lib()
     if choice == 'cpp' and cpp is None:
-        raise FileNotFoundError("BEN_BGADLL=cpp but extern/BGA/BGADLL.Cpp/bin/BGADLL.so (.dylib on macOS) is not built "
-                                "(git submodule update --init --recursive extern/BGA; sh extern/BGA/BGADLL.Cpp/build.sh)")
+        raise FileNotFoundError("BEN_BGADLL=cpp but extern/bgadll-cpp/bin/BGADLL.so (.dylib on macOS) is not built "
+                                "(git submodule update --init extern/bgadll-cpp; sh extern/bgadll-cpp/build.sh)")
     if choice != 'csharp' and cpp is not None:
         return 'cpp', cpp
     return 'csharp', _find_native_lib()

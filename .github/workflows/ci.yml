@@ -32,9 +32,11 @@ jobs:
       BEN_HEADLESS: "1"
       CUDA_VISIBLE_DEVICES: "-1"
     steps:
+      # Top-level submodules only: build_native.sh adds ddfast's nested extern/dds and
+      # leaves out bgadll-cpp's extern/BGA (the C# original, for its own correctness check).
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
@@ -119,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.cpu.outputs.native == 'true'
         with:
-          submodules: recursive
+          submodules: true
 
       - uses: actions/setup-python@v5
         if: steps.cpu.outputs.native == 'true'

@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # Fetch BEN's submodules and build its optional native engines:
 #   extern/ddfast              ddfast, the double-dummy solver (Python extension)
-#   extern/BGA/BGADLL.Cpp      the C++ BGADLL (PIMC) on ddfast
+#   extern/bgadll-cpp          the C++ BGADLL (PIMC) on ddfast
 # Both are optional: BEN falls back to dds3 and the C# BGADLL when they are not
 # built. Idempotent - safe to re-run, e.g. after a pull that moves a submodule.
 #
@@ -16,11 +16,13 @@ cd "$REPO_DIR"
 PYTHON="${PYTHON:-python}"
 failed=0
 
-# 1. Submodules, nested ones included (BGA's BGADLL.Cpp, ddfast's extern/dds).
-#    A clone made without --recurse-submodules has none of them yet.
+# 1. Submodules. A clone made without --recurse-submodules has none of them yet.
+#    ddfast with its nested extern/dds; bgadll-cpp alone (its extern/BGA, the C#
+#    original for its correctness check, is not needed to build or run it).
 echo "[ben-native] fetching submodules ..."
 git submodule sync --recursive
-if ! git submodule update --init --recursive; then
+if ! git submodule update --init --recursive extern/ddfast || \
+   ! git submodule update --init extern/bgadll-cpp; then
     echo "[ben-native] ERROR: git submodule update failed" >&2
     exit 1
 fi
@@ -36,7 +38,7 @@ fi
 
 # 3. The C++ BGADLL (PIMC). It opens ddfast at run time, so it builds either way.
 echo "[ben-native] building the C++ BGADLL ..."
-if ! sh extern/BGA/BGADLL.Cpp/build.sh; then
+if ! sh extern/bgadll-cpp/build.sh; then
     echo "[ben-native] WARNING: the C++ BGADLL did not build; PIMC will use the C# BGADLL." >&2
     failed=1
 fi

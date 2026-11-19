@@ -230,7 +230,7 @@ functions `src/pimc/BGADLL_Native.py` binds):
 
 | Engine | What | Solver |
 |--------|------|--------|
-| **cpp** (the default when built) | A C++ port, `extern/BGA/BGADLL.Cpp` ([randalburns/bgadll-cpp](https://github.com/randalburns/bgadll-cpp), a submodule of [randalburns/BGA](https://github.com/randalburns/BGA)); Linux and macOS | ddfast (`ddfast::card_results`, in the `libddfast.so` BEN already loaded, so one copy of the tables), else the vendored `libdds` |
+| **cpp** (the default when built) | A C++ port, `extern/bgadll-cpp` ([randalburns/bgadll-cpp](https://github.com/randalburns/bgadll-cpp)); Linux and macOS | ddfast (`ddfast::card_results`, in the `libddfast.so` BEN already loaded, so one copy of the tables), else the vendored `libdds` |
 | **csharp** | BGADLL.Native (NativeAOT C#), `bin/BGA/<os>/<arch>/BGADLL.*`; every platform | a `libdds` it loads by name: see the next section |
 
 ```bash
@@ -243,8 +243,9 @@ BEN_PIMC_DDS=haglund   # either engine: solve on the vendored DDS library instea
 Build the port:
 
 ```bash
-git submodule update --init --recursive extern/BGA   # BGA and its BGADLL.Cpp (randalburns/bgadll-cpp)
-sh extern/BGA/BGADLL.Cpp/build.sh      # -> extern/BGA/BGADLL.Cpp/bin/BGADLL.so (g++, C++17)
+git submodule update --init extern/bgadll-cpp   # randalburns/bgadll-cpp (not --recursive: its
+                                                #  extern/BGA is only for its own correctness check)
+sh extern/bgadll-cpp/build.sh   # -> extern/bgadll-cpp/bin/BGADLL.so (.dylib on macOS; C++17)
 ```
 
 `preflight.py` shows which engine and solver PIMC got, e.g.

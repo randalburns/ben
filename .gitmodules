@@ -5,4 +5,4 @@
 [submodule "extern/BGA"]
 	path = extern/BGA
 	url = https://github.com/randalburns/BGA.git
-	branch = cpp-ddfast-port
+	branch = main

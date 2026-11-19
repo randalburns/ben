@@ -52,7 +52,7 @@ def _find_native_lib():
 
 
 def _find_cpp_lib():
-    """The C++ port of BGADLL (extern/BGA, branch cpp-ddfast-port, built by
+    """The C++ port of BGADLL (extern/BGA/BGADLL.Cpp, randalburns/bgadll-cpp, built by
     BGADLL.Cpp/build.sh): the same C ABI as the C# library, with ddfast as its
     double-dummy solver. Linux (BGADLL.so) and macOS (BGADLL.dylib); None if it is
     not built."""
@@ -83,7 +83,7 @@ def _choose_engine():
     cpp = _find_cpp_lib()
     if choice == 'cpp' and cpp is None:
         raise FileNotFoundError("BEN_BGADLL=cpp but extern/BGA/BGADLL.Cpp/bin/BGADLL.so (.dylib on macOS) is not built "
-                                "(git submodule update --init extern/BGA; sh extern/BGA/BGADLL.Cpp/build.sh)")
+                                "(git submodule update --init --recursive extern/BGA; sh extern/BGA/BGADLL.Cpp/build.sh)")
     if choice != 'csharp' and cpp is not None:
         return 'cpp', cpp
     return 'csharp', _find_native_lib()

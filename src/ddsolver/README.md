@@ -262,6 +262,24 @@ change.
 macOS and Windows have no ddfast build, so there PIMC always uses the vendored
 library.
 
+**Measuring PIMC's solves.** `DDFAST_CAPI_STATS=<file>` makes ddfast's
+`libdds.so` append a summary to `<file>` when BEN exits:
+
+```bash
+DDFAST_CAPI_STATS=/tmp/pimc-dds.txt python game.py --boards christy170a.pbn --auto True
+```
+
+It reports calls and errors, time in the solver (in all and by tricks left),
+the OS threads that called and each thread's first call against later ones
+(ddfast sets up its search state per thread on the first call), and how many
+solves overlapped (busy wall time, mean and peak concurrency). Comparing the
+busy time with `pimc_declaring` + `pimc_defending` in BEN's timing summary
+shows how much of PIMC is solving. On the 8 boards above: 37,235 solves, the
+solver busy 5.6 s of PIMC's 21 s; BGADLL starts about 11 new threads per call
+(2,127 in all), each paying 6.8 ms on its first solve against 0.58 ms later,
+and never runs more than 8 solves at once (its thread-index pool). Unset, it
+costs one branch per call.
+
 ### The vendored libraries
 
 | Platform       | File                                   | DDS   |

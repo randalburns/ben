@@ -74,11 +74,12 @@ def _prepare_cuda():
 # GPUs, which keeps 10 bits of mantissa. That, not BEN's float16 inputs, is what
 # made GPU bid scores differ from the CPU's by up to ~0.003 (enough to move a
 # sampled hand across a threshold). Full float32 brings the difference to ~2e-6
-# for 10-30 % more time in the largest calls only. BEN_ONNX_TF32=1 restores TF32.
+# for 10-30 % more time in the largest calls only. BEN_TF32=1 restores TF32
+# (for TensorFlow too, see nn/tf_guard.py).
 _CUDA_OPTIONS = {
     'device_id': 0,
     'arena_extend_strategy': 'kSameAsRequested',
-    'use_tf32': '1' if os.getenv('BEN_ONNX_TF32', '0') == '1' else '0',
+    'use_tf32': '1' if os.getenv('BEN_TF32', '0') == '1' else '0',
 }
 
 

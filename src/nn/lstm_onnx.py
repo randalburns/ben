@@ -14,7 +14,7 @@ build() writes the same network - same weights, same arithmetic in float32 -
 with LSTM nodes. The weights come from either source:
 
   spec_from_loop_onnx(path)   a tf2onnx graph with Loop-based LSTMs (bidder.onnx)
-  spec_from_keras(path)       a .keras model (the default.conf bidding models)
+  spec_from_keras(model)      a Keras model (the default.conf bidding models)
 
 rewrite_loop_onnx() and rewrite_keras() check the result against the source on
 random input and return None when they disagree, so a model whose graph does not
@@ -108,12 +108,10 @@ def build(spec, input_size, half_input=True):
     return model.SerializeToString()
 
 
-def spec_from_keras(path):
-    """The Spec of a .keras bidding model: LSTM, Dropout, BatchNormalization, ...,
+def spec_from_keras(model):
+    """The Spec of a Keras bidding model: LSTM, Dropout, BatchNormalization, ...,
     TimeDistributed(Dense). Raises ValueError for anything else."""
     import keras
-    from nn.keras_compat import load_model
-    model = load_model(path, compile=False)
     lstms, norms, heads = [], [], []
     for layer in model.layers:
         if isinstance(layer, (keras.layers.InputLayer, keras.layers.Dropout)):
@@ -283,24 +281,26 @@ def rewrite_loop_onnx(path):
 def rewrite_keras(path):
     """bytes of an ONNX graph for a .keras bidding model, or None."""
     try:
-        spec, input_size = spec_from_keras(path)
-        rebuilt = build(spec, input_size)
-        from nn.keras_compat import load_model
-        model = load_model(path, compile=False)
-
         import tensorflow as tf
+        from nn.keras_compat import load_model
+        # The model is only read here: load it on the CPU so it takes no GPU
+        # memory. Without TF32 for the check: with a GPU present, TensorFlow's
+        # result under the CPU scope was still 5e-4 (bidder) to 2e-2 (bid info
+        # HCP) off float32 with TF32 enabled, and 1e-6 without.
+        tf32 = tf.config.experimental.tensor_float_32_execution_enabled()
+        tf.config.experimental.enable_tensor_float_32_execution(False)
+        try:
+            with tf.device('/CPU:0'):
+                model = load_model(path, compile=False)
+                spec, input_size = spec_from_keras(model)
+                rebuilt = build(spec, input_size)
 
-        def reference(x):
-            # Without TF32: TensorFlow's GPU matmuls use it by default, which
-            # is ~5e-4 off the float32 result this check is about.
-            tf32 = tf.config.experimental.tensor_float_32_execution_enabled()
-            tf.config.experimental.enable_tensor_float_32_execution(False)
-            try:
-                out = model(x, training=False)
-            finally:
-                tf.config.experimental.enable_tensor_float_32_execution(tf32)
-            return out if isinstance(out, (list, tuple)) else [out]
-        diff = _check(rebuilt, reference, input_size)
+                def reference(x):
+                    out = model(x, training=False)
+                    return out if isinstance(out, (list, tuple)) else [out]
+                diff = _check(rebuilt, reference, input_size)
+        finally:
+            tf.config.experimental.enable_tensor_float_32_execution(tf32)
     except Exception as ex:
         return _rejected(path, f'{type(ex).__name__}: {ex}')
     return rebuilt if diff <= _TOLERANCE else _rejected(path, f'differs from the source by {diff:.2g}')

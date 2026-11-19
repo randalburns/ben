@@ -581,27 +581,12 @@ class Sample:
         bid_count = player["bid_count"]
         actual_bids = player["actual_bids"]        
         if bid_count > 0:
-            X = np.zeros((lho_pard_rho.shape[0], n_steps, size), dtype=np.float16)
-            # Create the input for bidding sequence - we use our hand and will overwrite it in next step
-            A = binary.get_auction_binary_sampling(n_steps, auction, (nesw_i + position) % 4, hand, vuln, models, models.n_cards_bidding)
-            X[:, :, :] = A
-            # Overwrite hand information withthe samples
-            X[:, :, 7+index:7+models.n_cards_bidding+index] = lho_pard_rho[:, position-1:position, :]
-            X[:, :, 2+index] = (binary.get_hcp(lho_pard_rho[:, position-1, :]).reshape((-1, 1)) - 10) / 4
-            X[:, :, 3+index:7+index] = (binary.get_shape(lho_pard_rho[:, position-1, :]).reshape((-1, 1, 4)) - 3.25) / 1.75
-
-            # Predict bids based on the model for the specific position
-            sample_bids, _ = model.pred_fun_seq(X)
-            if verbose:
-                print("Model:   ", os.path.basename(model.model_path), "position", position, "bids", sample_bids.shape, "Exclude samples", self.exclude_samples)
-
-            sample_bids = sample_bids.reshape((lho_pard_rho.shape[0], n_steps, -1))
-
-            # Update min scores based on actual bids
-            min_scores = np.ones_like(min_scores_lho)
-            for i in range(n_steps):
-                if actual_bids[i] not in (bidding.BID2ID['PAD_START'], bidding.BID2ID['PAD_END']):
-                    min_scores = np.minimum(min_scores, sample_bids[:, i, actual_bids[i]])
+            # The score of a sample depends only on the hand of this position, and the same
+            # hands are drawn again in the later sampling rounds of this auction
+            context = ('process_bidding', id(model), (nesw_i + position) % 4, tuple(auction), tuple(vuln), n_steps, index, size, tuple(actual_bids))
+            min_scores = self.cached_rows(context, lho_pard_rho[:, position-1, :],
+                                          lambda hands: self.compute_position_bid_scores(position, hands, auction, nesw_i, hand, vuln, models, index, actual_bids, n_steps, size, model, verbose))
+            min_scores = min_scores.astype(min_scores_lho.dtype, copy=False)
 
             # Filter samples and update all min scores arrays based on `exclude_samples`
             mask = min_scores >= self.exclude_samples
@@ -623,6 +608,31 @@ class Sample:
         return lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho
 
         
+    def compute_position_bid_scores(self, position, position_hands, auction, nesw_i, hand, vuln, models, index, actual_bids, n_steps, size, model, verbose):
+        """For each hand of the position, the lowest score the bidder gives the bids actually made."""
+        X = np.zeros((position_hands.shape[0], n_steps, size), dtype=np.float16)
+        # Create the input for bidding sequence - we use our hand and will overwrite it in next step
+        A = binary.get_auction_binary_sampling(n_steps, auction, (nesw_i + position) % 4, hand, vuln, models, models.n_cards_bidding)
+        X[:, :, :] = A
+        # Overwrite hand information withthe samples
+        X[:, :, 7+index:7+models.n_cards_bidding+index] = position_hands[:, np.newaxis, :]
+        X[:, :, 2+index] = (binary.get_hcp(position_hands).reshape((-1, 1)) - 10) / 4
+        X[:, :, 3+index:7+index] = (binary.get_shape(position_hands).reshape((-1, 1, 4)) - 3.25) / 1.75
+
+        # Predict bids based on the model for the specific position
+        sample_bids, _ = model.pred_fun_seq(X)
+        if verbose:
+            print("Model:   ", os.path.basename(model.model_path), "position", position, "bids", sample_bids.shape, "Exclude samples", self.exclude_samples)
+
+        sample_bids = sample_bids.reshape((position_hands.shape[0], n_steps, -1))
+
+        # Update min scores based on actual bids
+        min_scores = np.ones(position_hands.shape[0], dtype=np.float32)
+        for i in range(n_steps):
+            if actual_bids[i] not in (bidding.BID2ID['PAD_START'], bidding.BID2ID['PAD_END']):
+                min_scores = np.minimum(min_scores, sample_bids[:, i, actual_bids[i]])
+        return min_scores
+
     def sample_cards_auction(self, auction, nesw_i, hand_str, vuln, n_samples, rng, models, old_c_hcp, old_c_shp, aceking, extend_samples = True, verbose = False):
         hand = binary.parse_hand_f(models.n_cards_bidding)(hand_str)
         n_steps = binary.calculate_step_bidding_info(auction)

@@ -19,6 +19,15 @@ If you like the software, please consider making a donation to support the devel
 
 The engine runs on **Python 3.12**, with the neural networks using TensorFlow 2.21.0 (Keras 3.15.x). All platforms standardise on Python 3.12.
 
+Clone with the submodules (ddfast and the C++ BGADLL live in `extern/`):
+
+```bash
+git clone --recurse-submodules https://github.com/randalburns/ben.git
+git config submodule.recurse true   # optional: later pulls and checkouts update the submodules too
+```
+
+If you already cloned without `--recurse-submodules`, `bash build_native.sh` fetches them (it runs `git submodule update --init --recursive`), builds ddfast and the C++ BGADLL, and runs `src/preflight.py`. Run it in BEN's Python environment, after the dependencies below are installed; `setup_linux.sh` runs it for you. Both engines are optional: without them BEN uses dds3 and the C# BGADLL.
+
 The recommended way of installing is in a [conda environment](https://docs.conda.io/en/latest/miniconda.html) (see [conda_setup.sh](conda_setup.sh)), but it can also be run in a plain `venv` / system Python 3.12 via `pip install -r requirements.txt`.
 
 For __Windows__ users: After installing anaconda, you  will have a new application called "Anaconda Prompt". Henceforth, you will have to run all commands in "Anaconda Prompt" not in "cmd". The title bar of your command prompt window should read *"Administrator: Anaconda Prompt (Miniconda3)"*
@@ -33,9 +42,9 @@ For __Ubuntu__ users: you might have to install libboost using `sudo apt install
 
 > **Double-dummy solver:** BEN runs its double-dummy solves on one of two backends:
 > - **dds3** (DDS 3.1, the default everywhere ddfast is not built). Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md).
-> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC solves on it too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
+> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it with `bash build_native.sh`, or by hand from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC solves on it too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
 >
-> - **PIMC engine (Linux and macOS, optional):** a C++ port of BGADLL with ddfast as its solver, from the `extern/BGA` submodule: `git submodule update --init --recursive extern/BGA`, `sh extern/BGA/BGADLL.Cpp/build.sh`. Once built, BEN loads it in place of the C# BGADLL; same results, faster PIMC.
+> - **PIMC engine (Linux and macOS, optional):** a C++ port of BGADLL with ddfast as its solver, built by `bash build_native.sh`, or by hand from the `extern/BGA` submodule: `git submodule update --init --recursive extern/BGA`, `sh extern/BGA/BGADLL.Cpp/build.sh`. Once built, BEN loads it in place of the C# BGADLL; same results, faster PIMC.
 >
 > `BEN_DDS=dds3` or `BEN_DDS=ddfast` forces BEN's backend, `BEN_BGADLL=cpp` or `csharp` picks the PIMC engine, and `BEN_PIMC_DDS=haglund` keeps PIMC on the vendored DDS library; `preflight.py` reports which is in use. The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine. The Docker images and Windows builds use dds3. Details: [src/ddsolver/README.md](src/ddsolver/README.md).
 

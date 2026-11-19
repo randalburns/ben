@@ -95,7 +95,7 @@ def check_pimc_dds(required):
 
     lib.bga_dds_backend.argtypes = []
     lib.bga_dds_backend.restype = ctypes.c_void_p
-    backend = ctypes.string_at(lib.bga_dds_backend()).decode("utf-8", "replace")
+    backend = native._read_string(lib.bga_dds_backend())   # frees the returned string
 
     if not backend.startswith("error") and backend != "none":
         # The C# BGADLL calls its DDS backend "haglund" whichever libdds it bound

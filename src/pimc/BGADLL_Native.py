@@ -154,7 +154,7 @@ def _setup_cpp_solver():
 def _cpp_backend(lib):
     lib.bga_dds_backend.argtypes = []
     lib.bga_dds_backend.restype = c_void_p
-    name = ctypes.string_at(lib.bga_dds_backend()).decode('utf-8', 'replace')
+    name = _read_string(lib.bga_dds_backend())   # frees the returned string
     if name == 'haglund':
         return os.getenv('BGA_DDS_LIB') or 'libdds.so'
     return name

@@ -117,15 +117,15 @@ class Sample:
 
         self.verbose = verbose
         self._row_cache = {}
-        self._row_cache_entries = 0
+        self._row_cache_bytes = 0
 
-    # Rows kept in the per-board cache before it is emptied, to bound its memory
-    ROW_CACHE_MAX_ENTRIES = 2_000_000
+    # Bytes (keys and results) kept in the per-board cache before it is emptied
+    ROW_CACHE_MAX_BYTES = 512 * 1024 * 1024
 
     def clear_sample_cache(self):
         """Forget the per-row results cached for the previous board."""
         self._row_cache = {}
-        self._row_cache_entries = 0
+        self._row_cache_bytes = 0
 
     def cached_rows(self, context, rows, compute):
         """One result per row of rows (a 2D array), computed by compute(rows_subset), which
@@ -139,11 +139,9 @@ class Sample:
         single new row of a larger batch is computed in a batch of two."""
         single = rows.shape[0] == 1
         context = (context, single)
-        cache = self._row_cache.get(context)
-        if cache is None:
-            if self._row_cache_entries > self.ROW_CACHE_MAX_ENTRIES:
-                self.clear_sample_cache()
-            cache = self._row_cache.setdefault(context, {})
+        if self._row_cache_bytes > self.ROW_CACHE_MAX_BYTES:
+            self.clear_sample_cache()
+        cache = self._row_cache.setdefault(context, {})
         flat = np.ascontiguousarray(rows).reshape(rows.shape[0], -1)
         keys = [row.tobytes() for row in flat]
         missing = {}
@@ -158,7 +156,7 @@ class Sample:
                 results = compute(rows[index])
             for key, result in zip(missing, results):
                 cache[key] = result
-            self._row_cache_entries += len(missing)
+            self._row_cache_bytes += sum(len(key) + 100 + getattr(result, 'nbytes', 8) for key, result in zip(missing, results))
         return np.array([cache[key] for key in keys])
 
     @classmethod
@@ -1774,7 +1772,12 @@ class Sample:
         keys = [row.tobytes() for row in flat]
         missing = [i for i, key in enumerate(keys) if key not in cache]
         if missing:
-            for i, p in zip(missing, model.pred_fun(x[missing])):
+            # The rows this decision has not predicted yet were often predicted at an earlier
+            # card of the board (the same hidden hand, the same play so far); cached_rows
+            # keeps them, and predicts the others with the batch-of-one kernel exactly when
+            # this decision would have (one missing row).
+            predicted = self.cached_rows(('play', model.name, x.shape[1:], x.dtype.str), x[missing], model.pred_fun)
+            for i, p in zip(missing, predicted):
                 cache[keys[i]] = p
         return np.stack([cache[key] for key in keys])
 

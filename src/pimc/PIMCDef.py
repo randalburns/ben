@@ -48,6 +48,7 @@ BGADLL_PATH = os.path.join(BIN_FOLDER, BGADLL_LIB)
 from pimc.BGADLL_Native import is_available as _native_available, \
     NativePIMCDef, NativeHand, NativePlay, NativeConstraints, NativeExtensions, NativeMacros, NativeCard
 USE_NATIVE_BGA = _native_available()
+from pimc import BGADLL_Native
 
 class BGADefDLL:
 
@@ -547,8 +548,10 @@ class BGADefDLL:
         except Exception as ex:
             print('Error AwaitEvaluation:', ex)
             sys.exit(1)
-        # Allow running threads to finalize
-        time.sleep(0.05)
+        # Allow running threads to finalize. The C++ port's AwaitEvaluation returns only
+        # after every worker has finished, so it needs no grace period.
+        if not (USE_NATIVE_BGA and BGADLL_Native.engine == 'cpp'):
+            time.sleep(0.05)
         if self.verbose:    
             print("max_playout",self.max_playout)
             print(f"Playouts: {self.pimc.Playouts}")

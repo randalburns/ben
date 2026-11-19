@@ -47,7 +47,7 @@ def _find_native_lib():
 
 
 def _find_cpp_lib():
-    """The C++ BGADLL (extern/BGA, BGADLL.Cpp/build.sh), or None if it has not been built.
+    """The C++ BGADLL (extern/bgadll-cpp, built by its build.sh), or None if it has not been built.
     It has the same C ABI as the C# NativeAOT library and gives the same results."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     roots = [os.path.abspath(os.path.join(script_dir, "..", "..")), os.path.abspath(os.path.join(script_dir, ".."))]
@@ -55,7 +55,7 @@ def _find_cpp_lib():
         roots.append(os.getenv('BEN_HOME'))
     name = 'BGADLL.dll' if sys.platform == 'win32' else 'BGADLL.dylib' if sys.platform == 'darwin' else 'BGADLL.so'
     for root in roots:
-        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', name)
+        path = os.path.join(root, 'extern', 'bgadll-cpp', 'bin', name)
         if os.path.isfile(path):
             return path
     return None
@@ -68,7 +68,7 @@ def _choose_lib():
     if want == 'csharp' or (want != 'cpp' and cpp is None):
         return _find_native_lib(), 'csharp'
     if cpp is None:
-        raise FileNotFoundError("BEN_BGADLL=cpp but the C++ BGADLL is not built: sh extern/BGA/BGADLL.Cpp/build.sh")
+        raise FileNotFoundError("BEN_BGADLL=cpp but the C++ BGADLL is not built: sh extern/bgadll-cpp/build.sh")
     return cpp, 'cpp'
 
 

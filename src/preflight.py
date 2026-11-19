@@ -98,7 +98,7 @@ def check_pimc_dds(required):
     backend = ctypes.string_at(lib.bga_dds_backend()).decode("utf-8", "replace")
 
     if native.bgadll_impl == "cpp" and backend in ("ddfast", "haglund"):
-        # The C++ BGADLL (extern/BGA) opens its solver itself: ddfast, else DDS 2.9.
+        # The C++ BGADLL (extern/bgadll-cpp) opens its solver itself: ddfast, else DDS 2.9.
         report(OK, f"PIMC engine: C++ BGADLL ({native._lib_path}) on {backend}")
         return
     if not backend.startswith("error") and backend != "none":

@@ -18,6 +18,7 @@ from objects import Card
 from openinglead.openinglead import validate_lead
 from nn.timing import ModelTimer
 import itertools
+import sample_jit
 import re
 
 init()
@@ -390,6 +391,12 @@ class Sample:
         # distribute AK
         loop_counter = 0
         js = np.zeros(generate_samples, dtype=int)
+        if sample_jit.usable((r_shp, np.float64), (r_hcp, np.float64), (cards_received, np.int64), (lho_pard_rho, np.int64)):
+            # Every sample receives one honour per round (no hand can reach 13 cards),
+            # so dealing to the samples with cards left is dealing to all of them
+            sample_jit.deal(rng, ak_out_i, r_shp, r_hcp, cards_received, lho_pard_rho, np.full(3, 13), cards_in_suit, True,
+                            self.use_biddinginfo, 3 * hcp_reduction_factor, self.use_biddinginfo, self.shp_reduction_factor)
+            js[:] = ak_out_i.shape[1]
         while np.min(js) < ak_out_i.shape[1]:
             cards = ak_out_i[s_all, js]
             receivers = distr_ak_vec(r_shp[s_all, :, cards//cards_in_suit], r_hcp, rng)
@@ -406,13 +413,20 @@ class Sample:
 
         valid_aces_kings = 0
         mask = np.zeros(generate_samples, dtype=bool) 
-        for i in range(generate_samples):
-            if self.validate_aces_kings(lho_pard_rho[i, :, :], aceking, n_cards):
-                mask[i] = True
-                valid_aces_kings += 1
-            # We break when we have the needed samples
-            if valid_aces_kings == n_samples:
-                break
+        valid = self.validate_aces_kings_vec(lho_pard_rho, aceking, n_cards)
+        if valid is not None:
+            # The first n_samples valid samples, as the loop below picks them
+            first_valid = np.flatnonzero(valid)[:n_samples]
+            mask[first_valid] = True
+            valid_aces_kings = len(first_valid)
+        else:
+            for i in range(generate_samples):
+                if self.validate_aces_kings(lho_pard_rho[i, :, :], aceking, n_cards):
+                    mask[i] = True
+                    valid_aces_kings += 1
+                # We break when we have the needed samples
+                if valid_aces_kings == n_samples:
+                    break
                 
         valid_samples = np.sum(mask)
         # Probably a problem with aces if we find less than 100, so we just ignore it and take the first up til n_samples
@@ -434,6 +448,10 @@ class Sample:
         js = np.zeros(n_samples, dtype=int)
         loop_counter = 0
         s_all_r = s_all[js < small_out_i.shape[1]]
+        if sample_jit.usable((r_shp, np.float64), (r_hcp, np.float64), (cards_received, np.int64), (lho_pard_rho, np.int64)):
+            sample_jit.deal(rng, small_out_i[:n_samples], r_shp, r_hcp, cards_received, lho_pard_rho, np.full(3, 13), cards_in_suit, False,
+                            False, 0.0, True, self.shp_reduction_factor)
+            js[:] = small_out_i.shape[1]
         while True:
             s_all_r = s_all[js < small_out_i.shape[1]]
             if len(s_all_r) == 0:
@@ -501,6 +519,41 @@ class Sample:
                 return lho_pard_rho
         else:
             return lho_pard_rho
+
+    def validate_aces_kings_vec(self, hands, aceking, n_cards):
+        """validate_aces_kings for every sample of hands (samples, 3, n_cards) at once;
+        None when the per-sample loop must be used."""
+        n = hands.shape[0]
+        if len(aceking) == 0:
+            return np.ones(n, dtype=bool)
+        if len(aceking) > hands.shape[1]:
+            return None
+        cards_per_suit = int(n_cards / 4)
+        valid = np.ones(n, dtype=bool)
+        for seat, (_, constraint) in enumerate(aceking.items()):
+            if constraint[1] == -1 and constraint[2] == -1 and constraint[3] == 0:
+                continue
+            hand = hands[:, seat, :]
+            count_aces = np.zeros(n, dtype=np.int64)
+            count_kings = np.zeros(n, dtype=np.int64)
+            for s in range(4):
+                count_aces += hand[:, s * cards_per_suit] == 1
+                count_kings += hand[:, s * cards_per_suit + 1] == 1
+            queen = np.full(n, -1, dtype=np.int64)
+            # NT
+            if constraint[0] != 4:
+                # Check trump king
+                trump_king = hand[:, constraint[0] * cards_per_suit + 1] == 1
+                count_aces += trump_king
+                count_kings -= trump_king
+                queen = hand[:, constraint[0] * cards_per_suit + 2]
+            if constraint[1] != -1:
+                valid &= (count_aces == constraint[1]) | (count_aces == constraint[1] + 3)
+            if constraint[2] != -1:
+                valid &= count_kings == constraint[2]
+            if constraint[3] != -1:
+                valid &= queen == constraint[3]
+        return valid
 
     def validate_aces_kings(self, hands, aceking, n_cards):
         if len(aceking) == 0:
@@ -1012,6 +1065,11 @@ class Sample:
         n_max_cards = np.zeros((n_samples, 2), dtype=int) + n_cards_to_receive
 
         js = np.zeros(n_samples, dtype=int)
+        use_jit = sample_jit.usable((r_shp, np.float64), (r_hcp, np.float64), (cards_received, np.int64), (h1_h2, np.int64))
+        if use_jit:
+            sample_jit.deal(rng, ak_out_i, r_shp, r_hcp, cards_received, h1_h2, n_cards_to_receive, cards_in_suit, True,
+                            use_bidding_info_stats, 3 * hcp_reduction_factor, use_bidding_info_stats, shp_reduction_factor)
+            js[:] = ak_out_i.shape[1]
         # Distribute AK
         loop = 0
         while True:
@@ -1043,6 +1101,10 @@ class Sample:
         #print("Loop counter", loop)
 
         js = np.zeros(n_samples, dtype=int)
+        if use_jit:
+            sample_jit.deal(rng, small_out_i, r_shp, r_hcp, cards_received, h1_h2, n_cards_to_receive, cards_in_suit, False,
+                            False, 0.0, True, shp_reduction_factor)
+            js[:] = small_out_i.shape[1]
         loop = 0
         while True:
             s_all_r = s_all[js < small_out_i.shape[1]]

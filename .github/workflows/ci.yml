@@ -39,9 +39,23 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # GitHub's runners have no AVX-512, so ddfast builds its Google Highway path, which
+      # needs Highway's headers: Homebrew's on macOS, the release ddfast's CI pins on Linux.
       - name: Google Highway (macOS)
         if: runner.os == 'macOS'
         run: brew install highway
+
+      - name: Google Highway (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: google/highway
+          ref: "1.4.0"
+          path: highway
+
+      - name: Highway headers path (Linux)
+        if: runner.os == 'Linux'
+        run: echo "HWY_INC=$GITHUB_WORKSPACE/highway" >> "$GITHUB_ENV"
 
       - name: Python packages
         run: |

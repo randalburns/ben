@@ -46,10 +46,77 @@ def _find_native_lib():
     return os.path.join(bin_folder, 'BGA', platform_dir, arch, lib_name)
 
 
-_lib_path = _find_native_lib()
+def _find_cpp_lib():
+    """The C++ BGADLL (extern/BGA, BGADLL.Cpp/build.sh), or None if it has not been built.
+    It has the same C ABI as the C# NativeAOT library and gives the same results."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    roots = [os.path.abspath(os.path.join(script_dir, "..", "..")), os.path.abspath(os.path.join(script_dir, ".."))]
+    if os.getenv('BEN_HOME'):
+        roots.append(os.getenv('BEN_HOME'))
+    name = 'BGADLL.dll' if sys.platform == 'win32' else 'BGADLL.dylib' if sys.platform == 'darwin' else 'BGADLL.so'
+    for root in roots:
+        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _choose_lib():
+    """BEN_BGADLL=cpp / csharp chooses the PIMC engine; unset, the C++ one if it is built."""
+    want = os.getenv('BEN_BGADLL', '').lower()
+    cpp = _find_cpp_lib()
+    if want == 'csharp' or (want != 'cpp' and cpp is None):
+        return _find_native_lib(), 'csharp'
+    if cpp is None:
+        raise FileNotFoundError("BEN_BGADLL=cpp but the C++ BGADLL is not built: sh extern/BGA/BGADLL.Cpp/build.sh")
+    return cpp, 'cpp'
+
+
+_lib_path, bgadll_impl = _choose_lib()
 _lib = None
-# The DDS library BGADLL ended up with: "ddfast" or the path of the libdds preloaded.
+# The DDS library BGADLL ended up with: "ddfast", "haglund" (C++ engine), or the path of the
+# libdds preloaded for the C# engine.
 dds_library = None
+
+
+def _haglund_candidates():
+    """BEN's own DDS 2.9 library, as shipped beside the C# BGADLL or in bin/."""
+    lib_dir = os.path.dirname(os.path.abspath(_find_native_lib()))
+    bin_dir = os.path.dirname(os.path.dirname(os.path.dirname(lib_dir)))
+    if sys.platform == 'darwin':
+        return [os.path.join(lib_dir, 'libdds.2.9.0.dylib'), os.path.join(lib_dir, 'libdds.dylib'),
+                os.path.join(bin_dir, 'darwin', 'libdds.2.9.0.dylib')]
+    return [os.path.join(lib_dir, 'libdds.so'), os.path.join(bin_dir, 'libdds.so')]
+
+
+def _load_cpp():
+    """The C++ BGADLL opens its solver itself: ddfast's libddfast (the copy BEN's DDSolver
+    already loaded, so the tables are shared), else BEN's DDS 2.9. BEN_PIMC_DDS=haglund
+    forces DDS 2.9."""
+    global dds_library
+    if os.getenv('BEN_PIMC_DDS', '').lower() == 'haglund':
+        os.environ['BGA_DDS_BACKEND'] = 'haglund'
+    else:
+        try:
+            from ddsolver.ddsolver import ddfast_libddfast
+            path = ddfast_libddfast()
+            if path and not os.getenv('BGA_DDFAST_LIB'):
+                os.environ['BGA_DDFAST_LIB'] = path
+        except ImportError:
+            pass
+    if not os.getenv('BGA_DDS_LIB'):
+        found = next((p for p in _haglund_candidates() if os.path.isfile(p)), None)
+        if found:
+            os.environ['BGA_DDS_LIB'] = found
+    lib = ctypes.CDLL(_lib_path)
+    lib.bga_dds_backend.argtypes = []
+    lib.bga_dds_backend.restype = c_void_p
+    raw = lib.bga_dds_backend()
+    dds_library = ctypes.string_at(raw).decode() if raw else None
+    if raw:
+        lib.bga_free_string.argtypes = [c_void_p]
+        lib.bga_free_string(raw)
+    return lib
 
 
 def _preload_ddfast_libdds():
@@ -78,6 +145,10 @@ def _get_lib():
     if _lib is None:
         if not os.path.isfile(_lib_path):
             raise FileNotFoundError(f"BGADLL native library not found: {_lib_path}")
+        if bgadll_impl == 'cpp':
+            _lib = _load_cpp()
+            _setup_functions(_lib)
+            return _lib
         # BGADLL depends on dds.dll (Haglund) - preload it so NativeAOT P/Invoke can resolve it
         lib_dir = os.path.dirname(os.path.abspath(_lib_path))
         bin_dir = os.path.dirname(os.path.dirname(os.path.dirname(lib_dir)))  # bin/BGA/platform/arch -> bin/

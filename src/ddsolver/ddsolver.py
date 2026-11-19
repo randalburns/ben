@@ -98,11 +98,26 @@ if os.getenv("DDFAST_TABLE_MAP") is None:
 MAP_TABLES = os.environ["DDFAST_TABLE_MAP"] not in ("", "0")
 
 
+def _ddfast_library(stem):
+    """Path of one of ddfast's shared libraries beside the ddfast package (python/build.sh
+    builds them on Linux and macOS), or None if it is not there."""
+    ext = {"linux": ".so", "darwin": ".dylib"}.get("linux" if sys.platform.startswith("linux") else sys.platform)
+    if ext is None:
+        return None
+    path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), stem + ext)
+    return path if os.path.isfile(path) else None
+
+
 def ddfast_libdds():
-    """Path of ddfast's libdds.so, DDS's C interface on ddfast (a drop-in libdds for BGADLL /
-    PIMC), beside the ddfast package; None if it was not built (Linux only so far)."""
-    path = os.path.join(os.path.dirname(os.path.abspath(ddfast.__file__)), "libdds.so")
-    return path if sys.platform.startswith("linux") and os.path.isfile(path) else None
+    """Path of ddfast's libdds (DDS's C interface on ddfast: a drop-in libdds for the C#
+    BGADLL), or None if it was not built."""
+    return _ddfast_library("libdds")
+
+
+def ddfast_libddfast():
+    """Path of libddfast, the solver this module is linked against: the C++ BGADLL opens it
+    (BGA_DDFAST_LIB), so BEN's DDSolver and PIMC share one copy of the tables."""
+    return _ddfast_library("libddfast")
 
 
 _initialised = False

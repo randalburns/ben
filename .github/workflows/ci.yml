@@ -1,0 +1,88 @@
+# BEN's native engines and a smoke test, on every pull request and push to main.
+#   build   Linux (x86-64) and macOS (Apple silicon): fetch the submodules, build ddfast and
+#           the C++ BGADLL (build_native.sh, which ends with preflight), run the unit tests,
+#           and play one board end to end.
+#   ci-ok   the one check to require in the main ruleset: passes when every build job passed.
+# ddfast's endgame tables (~1.1 GB, a few minutes to build) are cached per runner OS and
+# architecture and per ddfast commit.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      DDFAST_TABLES: ${{ github.workspace }}/extern/ddfast/build/tables
+      BEN_HEADLESS: "1"
+      CUDA_VISIBLE_DEVICES: "-1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Google Highway (macOS)
+        if: runner.os == 'macOS'
+        run: brew install highway
+
+      - name: Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt nanobind pytest
+
+      - name: ddfast commit
+        id: ddfast
+        run: echo "sha=$(git -C extern/ddfast rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: extern/ddfast/build/tables
+          key: ddfast-tables-${{ runner.os }}-${{ runner.arch }}-${{ steps.ddfast.outputs.sha }}
+
+      - name: Build native engines and preflight
+        run: PYTHON=python bash build_native.sh
+
+      - name: Unit tests
+        working-directory: src
+        run: python -m pytest -q test_calculate.py
+
+      - name: Play one board
+        working-directory: src
+        run: |
+          python - <<'EOF'
+          text = open('christy170a.pbn').read()
+          first = text.index('[Board ')
+          second = text.index('[Board ', first + 1)
+          open('ci_one_board.pbn', 'w').write(text[:second])
+          EOF
+          python game.py --boards ci_one_board.pbn --auto True --seed 42 --outputpbn ci_out.pbn 2>&1 | tee ci_game.log
+          grep -q "Board played in" ci_game.log
+          grep -q "^\[Auction" ci_out.pbn
+
+  ci-ok:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: All build jobs passed
+        run: |
+          echo '${{ toJSON(needs) }}'
+          ! echo '${{ toJSON(needs) }}' | grep -Eq '"result": "(failure|cancelled|skipped)"'

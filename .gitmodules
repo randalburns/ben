@@ -1,7 +1,7 @@
 [submodule "extern/ddfast"]
 	path = extern/ddfast
 	url = https://github.com/randalburns/ddfast.git
-	branch = dds-capi
+	branch = main
 [submodule "extern/bgadll-cpp"]
 	path = extern/bgadll-cpp
 	url = https://github.com/randalburns/bgadll-cpp.git

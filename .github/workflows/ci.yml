@@ -2,6 +2,8 @@
 #   build   Linux (x86-64) and macOS (Apple silicon): fetch the submodules, build ddfast and
 #           the C++ BGADLL (build_native.sh, which ends with preflight), run the unit tests,
 #           and play one board end to end.
+#   linux-avx512  optional: ddfast's native AVX-512 path when the runner has AVX-512; skipped
+#           otherwise, and not part of ci-ok.
 #   ci-ok   the one check to require in the main ruleset: passes when every build job passed.
 # ddfast's endgame tables (~1.1 GB, a few minutes to build) are cached per runner OS and
 # architecture and per ddfast commit.
@@ -79,6 +81,80 @@ jobs:
         run: python -m pytest -q test_calculate.py
 
       - name: Play one board
+        working-directory: src
+        run: |
+          python - <<'EOF'
+          text = open('christy170a.pbn').read()
+          first = text.index('[Board ')
+          second = text.index('[Board ', first + 1)
+          open('ci_one_board.pbn', 'w').write(text[:second])
+          EOF
+          python game.py --boards ci_one_board.pbn --auto True --seed 42 --outputpbn ci_out.pbn 2>&1 | tee ci_game.log
+          grep -q "Board played in" ci_game.log
+          grep -q "^\[Auction" ci_out.pbn
+
+  # ddfast's native AVX-512 path, when the runner happens to have AVX-512's Ice Lake set (some
+  # GitHub hosts do, most do not). Optional: skipped with a notice on other hosts, and not in
+  # ci-ok's needs, so it never blocks a merge.
+  linux-avx512:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DDFAST_TABLES: ${{ github.workspace }}/extern/ddfast/build/tables
+      BEN_HEADLESS: "1"
+      CUDA_VISIBLE_DEVICES: "-1"
+    steps:
+      - name: CPU
+        id: cpu
+        run: |
+          grep -m1 'model name' /proc/cpuinfo
+          f=$(grep -m1 '^flags' /proc/cpuinfo)
+          native=true
+          for x in avx512f avx512vl avx512bw avx512dq avx512cd avx512vbmi avx512_vbmi2 avx512_vpopcntdq avx512_bitalg gfni bmi2; do
+            case " $f " in *" $x "*) ;; *) echo "missing $x"; native=false ;; esac
+          done
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+          [ "$native" = true ] || echo "::notice::This runner has no AVX-512 (Ice Lake set); the AVX-512 test was skipped"
+
+      - uses: actions/checkout@v4
+        if: steps.cpu.outputs.native == 'true'
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        if: steps.cpu.outputs.native == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Python packages
+        if: steps.cpu.outputs.native == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt nanobind pytest
+
+      - name: ddfast commit
+        id: ddfast
+        if: steps.cpu.outputs.native == 'true'
+        run: echo "sha=$(git -C extern/ddfast rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        if: steps.cpu.outputs.native == 'true'
+        with:
+          path: extern/ddfast/build/tables
+          key: ddfast-tables-${{ runner.os }}-${{ runner.arch }}-${{ steps.ddfast.outputs.sha }}
+
+      - name: Build native engines (AVX-512, no Highway) and preflight
+        if: steps.cpu.outputs.native == 'true'
+        run: PYTHON=python bash build_native.sh
+
+      - name: Unit tests
+        if: steps.cpu.outputs.native == 'true'
+        working-directory: src
+        run: python -m pytest -q test_calculate.py
+
+      - name: Play one board
+        if: steps.cpu.outputs.native == 'true'
         working-directory: src
         run: |
           python - <<'EOF'

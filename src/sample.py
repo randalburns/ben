@@ -9,7 +9,7 @@ import binary
 
 from bidding import bidding
 import deck52
-from util import get_all_hidden_cards32, get_all_hidden_cards, convert_to_probability_with_weight
+from util import get_all_hidden_cards32, get_all_hidden_cards, convert_to_probability_with_weight, sample_keys
 from configparser import ConfigParser
 from util import hand_to_str
 from collections import defaultdict
@@ -1400,27 +1400,6 @@ class Sample:
 
             hidden_hand1, hidden_hand2 = h1_h2[:, 0], h1_h2[:, 1]
             #print("hidden_hand1, hidden_hand2", hidden_hand1, hidden_hand2)
-            states = [np.zeros((hidden_hand1.shape[0], 13, 298),dtype=np.int8) for _ in range(4)]
-            # we can reuse the x_play array from card_players except the player's hand
-            for k in range(4):
-                for i in range(trick_i + 1):
-                    states[k][:, i, 32:] = card_players[k].x_play[0, i, 32:]
-
-            # for player_i we can use the hand from card_players x_play (because the cards are known)
-            for i in range(trick_i + 1):
-                states[player_i][:, i, :32] = card_players[player_i].x_play[0, i, :32]
-
-            # all players know dummy's cards
-            if player_i in (0, 2, 3):
-                for i in range(trick_i + 1):
-                    states[player_i][:, i, 32:64] = card_players[1].x_play[0, i, :32]
-                    states[1][:, i, :32] = card_players[1].x_play[0, i, :32]
-
-            # dummy knows declarer's cards
-            if player_i == 1:
-                for i in range(trick_i + 1):
-                    states[player_i][:, i, 32:64] = card_players[3].x_play[0, i, :32]
-                    states[3][:, i, :32] = card_players[3].x_play[0, i, :32]
 
             # add the current trick cards to the hidden hands
             if len(current_trick) > 0:
@@ -1430,42 +1409,68 @@ class Sample:
                     if (leader_i + i) % 4 == hidden_2_i:
                         hidden_hand2[:, card] += 1
 
-            for k in range(trick_i + 1):
-                states[hidden_1_i][:, k, :32] = hidden_hand1
-                states[hidden_2_i][:, k, :32] = hidden_hand2
-                for card in player_cards_played[hidden_1_i][k:]:
-                    states[hidden_1_i][:, k, card] += 1
-                for card in player_cards_played[hidden_2_i][k:]:
-                    states[hidden_2_i][:, k, card] += 1
+            def build_states(rows, n_tricks=13):
+                # The play states of the samples in rows. The samples only differ in the
+                # hidden hands, so the filters below work on the first trick's hands
+                # (n_tricks=1) and the full states are built for the samples that are kept.
+                h1 = hidden_hand1[rows]
+                h2 = hidden_hand2[rows]
+                tricks = range(min(trick_i + 1, n_tricks))
+                states = [np.zeros((h1.shape[0], n_tricks, 298),dtype=np.int8) for _ in range(4)]
+                # we can reuse the x_play array from card_players except the player's hand
+                for k in range(4):
+                    for i in tricks:
+                        states[k][:, i, 32:] = card_players[k].x_play[0, i, 32:]
+
+                # for player_i we can use the hand from card_players x_play (because the cards are known)
+                for i in tricks:
+                    states[player_i][:, i, :32] = card_players[player_i].x_play[0, i, :32]
+
+                # all players know dummy's cards
+                if player_i in (0, 2, 3):
+                    for i in tricks:
+                        states[player_i][:, i, 32:64] = card_players[1].x_play[0, i, :32]
+                        states[1][:, i, :32] = card_players[1].x_play[0, i, :32]
+
+                # dummy knows declarer's cards
+                if player_i == 1:
+                    for i in tricks:
+                        states[player_i][:, i, 32:64] = card_players[3].x_play[0, i, :32]
+                        states[3][:, i, :32] = card_players[3].x_play[0, i, :32]
+
+                for k in tricks:
+                    states[hidden_1_i][:, k, :32] = h1
+                    states[hidden_2_i][:, k, :32] = h2
+                    for card in player_cards_played[hidden_1_i][k:]:
+                        states[hidden_1_i][:, k, card] += 1
+                    for card in player_cards_played[hidden_2_i][k:]:
+                        states[hidden_2_i][:, k, card] += 1
+                return states
+
+            states = build_states(slice(None), n_tricks=1)
         else:
             # In cheat mode all cards are known
             known_nesw = player_to_nesw_i(player_i, contract)
-            states = [np.zeros((1, 13, 298),dtype=np.int8) for _ in range(4)]
+            full_states = [np.zeros((1, 13, 298),dtype=np.int8) for _ in range(4)]
             for k in range(4):
                 for i in range(13):
-                    states[k][0, i, :32] = card_players[k].x_play[0, i, :32]
+                    full_states[k][0, i, :32] = card_players[k].x_play[0, i, :32]
+
+            def build_states(rows):
+                return [s[rows] for s in full_states]
+
+            states = full_states
 
         if self.verbose:
             print(f"players_states {states[0].shape[0]} trick {trick_i+1}")
 
         def get_unique_samples(states):
             counts = defaultdict(int)
-            samples = set()  # Use a set instead of a list for O(1) lookups
             unique_indices = np.ones(states[0].shape[0], dtype=bool)  # Assuming this is a NumPy boolean mask
 
-            for i in range(states[0].shape[0]):
-                # Use tobytes() for efficient hashing - avoids astype() which can cause issues in NumPy 2.0
-                sample = (
-                    states[0][i, 0, :32].tobytes(),
-                    states[1][i, 0, :32].tobytes(),
-                    states[2][i, 0, :32].tobytes(),
-                    states[3][i, 0, :32].tobytes()
-                )
-                if sample in samples:
+            for i, sample in enumerate(sample_keys(states)):
+                if sample in counts:
                     unique_indices[i] = False
-                else:
-                    samples.add(sample)
-
                 counts[sample] += 1
 
             return unique_indices, counts  # Returning counts only if needed
@@ -1473,6 +1478,8 @@ class Sample:
         unique_indices, counts = get_unique_samples(states)
 
         # Use the unique_indices to filter player_states
+        # rows: the samples kept so far, in order; states holds only their first trick
+        rows = np.flatnonzero(unique_indices)
         states = [state[unique_indices] for state in states]
         
         if self.verbose:
@@ -1485,6 +1492,7 @@ class Sample:
                 accept = np.ones_like(accept).astype(bool)
 
             states = [s[accept] for s in states]
+            rows = rows[accept]
 
         else:
             c_hcp, c_shp = None, None
@@ -1519,17 +1527,18 @@ class Sample:
 
         sorted_min_bid_scores = min_bid_scores[sorted_indices]
         # Sort second dimension within each array in states based on min_bid_scores
-        bidding_states = [s[sorted_indices] for s in states]
+        rows = rows[sorted_indices]
 
         #print(bidding_states[0].shape[0])
         valid_bidding_samples_good = np.sum(sorted_min_bid_scores > self.bidding_threshold_sampling)
         #valid_bidding_samples = np.sum(sorted_min_bid_scores > self.bid_extend_play_threshold)
         #print(valid_bidding_samples_good, valid_bidding_samples, sample_boards_for_play)
-        if bidding_states[0].shape[0] > 2 * self.sample_hands_play and valid_bidding_samples_good > 10:
+        if rows.shape[0] > 2 * self.sample_hands_play and valid_bidding_samples_good > 10:
             # We drop the samples we are not going to use
             mask = sorted_min_bid_scores > self.bid_extend_play_threshold/2
-            bidding_states = [s[mask] for s in bidding_states]
+            rows = rows[mask]
             sorted_min_bid_scores = sorted_min_bid_scores[mask]
+        bidding_states = build_states(rows)
         assert bidding_states[0].shape[0] > 0, "No samples after checking bidding"
 
         if self.verbose:

@@ -118,6 +118,7 @@ class Sample:
         self.verbose = verbose
         self._row_cache = {}
         self._row_cache_bytes = 0
+        self._order_stats = {}
 
     # Bytes (keys and results) kept in the per-board cache before it is emptied
     ROW_CACHE_MAX_BYTES = 512 * 1024 * 1024
@@ -126,6 +127,7 @@ class Sample:
         """Forget the per-row results cached for the previous board."""
         self._row_cache = {}
         self._row_cache_bytes = 0
+        self._order_stats = {}
 
     def cached_rows(self, context, rows, compute):
         """One result per row of rows (a 2D array), computed by compute(rows_subset), which
@@ -606,6 +608,28 @@ class Sample:
         return lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho
 
         
+    def filter_samples_by_bidding(self, players, lho_pard_rho, auction, nesw_i, hand, vuln, models, index, n_steps, size, order_stats):
+        """The deals consistent with every player's bids, checked in the order of players, and
+        each player's scores; None if no deal is left. order_stats (if given) gets the share of
+        the deals each player keeps."""
+        # Initialize min scores arrays for each position
+        min_scores_lho = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
+        min_scores_partner = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
+        min_scores_rho = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
+        for player in players:
+            n_before = lho_pard_rho.shape[0]
+            # Call process_bidding for the current player, updating all `min_scores` arrays
+            lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho = self.process_bidding(
+                player, lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho,
+                auction, nesw_i, hand, vuln, models, index, player["actual_bids"], n_steps, size, models.bidder_model if player["position"] == 2 else models.opponent_model, self.verbose
+            )
+            if order_stats is not None and player["bid_count"] > 0:
+                order_stats[player["position"]] = lho_pard_rho.shape[0] / n_before
+            #print(f"Processed bidding for player {player['position']} lho_pard_rho shape", lho_pard_rho.shape)
+            if lho_pard_rho.shape[0] == 0:
+                return None
+        return lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho
+
     def compute_position_bid_scores(self, position, position_hands, auction, nesw_i, hand, vuln, models, index, actual_bids, n_steps, size, model, verbose):
         """For each hand of the position, the lowest score the bidder gives the bids actually made."""
         X = np.zeros((position_hands.shape[0], n_steps, size), dtype=np.float16)
@@ -695,24 +719,30 @@ class Sample:
         # Rearrange the players in the order [2, 3, 1]
         players = [players[1], players[2], players[0]]
 
-        # Initialize min scores arrays for each position
-        min_scores_lho = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
-        min_scores_partner = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
-        min_scores_rho = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
+        # We will now validate the generated deals against the actual bidding, one player at a
+        # time. A deal is dropped as soon as one player's bids are too unlikely with it, so the
+        # players that drop the most deals are checked first: the order is learned from the
+        # earlier sampling rounds for this auction. The deals kept and their scores do not
+        # depend on the order (every deal is scored on its own).
+        order_key = (tuple(auction), nesw_i, hand.tobytes())
+        order_stats = self._order_stats.setdefault(order_key, {})
+        if all(p["position"] in order_stats for p in players if p["bid_count"] > 0):
+            ordered_players = sorted(players, key=lambda p: order_stats.get(p["position"], 1.0))
+        else:
+            ordered_players = players  # learn from the usual order first
 
-        # We will now validate the generated deals against the actual bidding.
-        # We take one player at a time, and start with the most difficult one (based on number of bids)
-        for player in players:         
-            # Call process_bidding for the current player, updating all `min_scores` arrays
-            lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho = self.process_bidding(
-                player, lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho, 
-                auction, nesw_i, hand, vuln, models, index, actual_bids, n_steps, size, models.bidder_model if player["position"] == 2 else models.opponent_model, self.verbose
-            )
-            #print(f"Processed bidding for player {player['position']} lho_pard_rho shape", lho_pard_rho.shape)
-            if lho_pard_rho.shape[0] == 0:
-                bidding_scores = []
-                quality = -1
-                return lho_pard_rho, bidding_scores, c_hcp, c_shp, quality
+        result = self.filter_samples_by_bidding(ordered_players, lho_pard_rho, auction, nesw_i, hand, vuln, models, index, n_steps, size, order_stats)
+        if ordered_players != players and (result is None or result[0].shape[0] <= 1):
+            # With two deals or more left, every player's batch had two deals or more, in the
+            # usual order too. With fewer, the usual order may have scored a deal alone, and a
+            # batch of one can differ in the last bit: then check the deals in the usual order
+            # (the deals already scored in batches come from the cache).
+            result = self.filter_samples_by_bidding(players, lho_pard_rho, auction, nesw_i, hand, vuln, models, index, n_steps, size, None)
+        if result is None:
+            bidding_scores = []
+            quality = -1
+            return lho_pard_rho[:0], bidding_scores, c_hcp, c_shp, quality
+        lho_pard_rho, min_scores_lho, min_scores_partner, min_scores_rho = result
 
         min_scores = np.ones(lho_pard_rho.shape[0], dtype=np.float32)
 

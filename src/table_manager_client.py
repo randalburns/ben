@@ -1134,7 +1134,7 @@ async def main():
         if BGADLL.get_dll() is not None:
             pimc = BGADLL(None, None, None, None, None, None, verbose)
             pimcdef = BGADefDLL(None, None, None, None, None, None, None, verbose)
-            print(f"PIMC enabled. Version {pimc.version()} DDS: {pimc.dds_backend()}")
+            print(f"PIMC enabled. Version {pimc.version()} Engine: {pimc.engine()} DDS: {pimc.dds_backend()}")
             print(f"PIMCDef enabled. Version {pimcdef.version()}")
         else:
             print("PIMC/PIMCDef disabled (BGADLL not available for this platform)")

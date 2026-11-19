@@ -74,6 +74,13 @@ fi
 export DOTNET_ROOT="$DOTNET_DIR"
 export PATH="$DOTNET_DIR:$PATH"
 
+# 5. Submodules and the optional native engines (ddfast, the C++ BGADLL).
+#    Fetches the submodules even if the repo was cloned without --recurse-submodules.
+#    Optional: BEN falls back to dds3 and the C# BGADLL if they do not build.
+sudo apt-get install -y g++ git
+bash "$REPO_DIR/build_native.sh" || \
+    echo "[ben-setup] WARNING: native build incomplete (see above); BEN will use the fallbacks."
+
 echo
 echo "[ben-setup] done."
 echo "  Activate:  source $VENV_DIR/bin/activate     (or 'ben-activate' in a new shell)"

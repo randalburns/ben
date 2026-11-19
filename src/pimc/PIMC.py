@@ -50,6 +50,7 @@ import ctypes
 from pimc.BGADLL_Native import is_available as _native_available, _get_lib, _read_string, \
     NativePIMC, NativeHand, NativePlay, NativeConstraints, NativeExtensions, NativeMacros, NativeCard
 USE_NATIVE_BGA = _native_available()
+from pimc import BGADLL_Native
 
 class BGADLL:
 
@@ -154,6 +155,13 @@ class BGADLL:
         dll = BGADLL.get_dll()  # Retrieve the loaded DLL classes through the singleton
         PIMC = dll["PIMC"]
         return PIMC().version()
+
+    def engine(self):
+        """The BGADLL engine in use: "C++ port", "C#" (NativeAOT), or ".NET" (pythonnet)."""
+        if USE_NATIVE_BGA:
+            from pimc import BGADLL_Native
+            return "C++ port" if BGADLL_Native.engine == "cpp" else "C#"
+        return ".NET"
 
     def dds_backend(self):
         if USE_NATIVE_BGA:
@@ -555,8 +563,10 @@ class BGADLL:
         except Exception as ex:
             print('Error AwaitEvaluation:', ex)
             sys.exit(1)
-        # Allow running threads to finalize
-        time.sleep(0.05)
+        # Allow running threads to finalize. The C++ port's AwaitEvaluation returns only
+        # after every worker has finished, so it needs no grace period.
+        if not (USE_NATIVE_BGA and BGADLL_Native.engine == 'cpp'):
+            time.sleep(0.05)
         if self.verbose:    
             print("max_playout",self.max_playout)
             print(f"Playouts: {self.pimc.Playouts}")

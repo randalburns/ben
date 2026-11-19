@@ -3,7 +3,7 @@
 This is a game engine for [bridge](https://en.wikipedia.org/wiki/Contract_bridge).
 It can be used as a robot player, to do analysis, or to develop AI for bridge.
 
-The engine is built using machine learning (neural networks) and the [double dummy solver](https://github.com/dds-bridge/dds), used through the `dds3` Python extension (see [src/ddsolver/README.md](src/ddsolver/README.md)).
+The engine is built using machine learning (neural networks) and a double dummy solver: [DDS](https://github.com/dds-bridge/dds) through its `dds3` Python extension, or on Linux optionally [ddfast](https://github.com/randalburns/ddfast) (see [src/ddsolver/README.md](src/ddsolver/README.md)).
 
 To get a first impression of how the engine plays, please take a look at the [demo](https://lorserker.github.io/ben/demo/demo.html), or watch the bridge streamer Peter Hollands [demo the robot](https://www.youtube.com/watch?v=onG_V7vwxUk&t=150s) on IntoBridge.
 
@@ -19,6 +19,15 @@ If you like the software, please consider making a donation to support the devel
 
 The engine runs on **Python 3.12**, with the neural networks using TensorFlow 2.21.0 (Keras 3.15.x). All platforms standardise on Python 3.12.
 
+Clone with the submodules (ddfast and the C++ BGADLL live in `extern/`):
+
+```bash
+git clone --recurse-submodules https://github.com/randalburns/ben.git
+git config submodule.recurse true   # optional: later pulls and checkouts update the submodules too
+```
+
+If you already cloned without `--recurse-submodules`, `bash build_native.sh` fetches them (`git submodule update --init`), builds ddfast and the C++ BGADLL, and runs `src/preflight.py`. Run it in BEN's Python environment, after the dependencies below are installed; `setup_linux.sh` runs it for you. Both engines are optional: without them BEN uses dds3 and the C# BGADLL.
+
 The recommended way of installing is in a [conda environment](https://docs.conda.io/en/latest/miniconda.html) (see [conda_setup.sh](conda_setup.sh)), but it can also be run in a plain `venv` / system Python 3.12 via `pip install -r requirements.txt`.
 
 For __Windows__ users: After installing anaconda, you  will have a new application called "Anaconda Prompt". Henceforth, you will have to run all commands in "Anaconda Prompt" not in "cmd". The title bar of your command prompt window should read *"Administrator: Anaconda Prompt (Miniconda3)"*
@@ -31,14 +40,31 @@ For __Mac M1/M2__ users: you need to install [Homebrew](https://brew.sh/) if you
 
 For __Ubuntu__ users: you might have to install libboost using `sudo apt install libboost-thread-dev`.
 
-> **Double-dummy solver:** BEN's double-dummy solver uses the `dds3` extension (DDS 3.0.0), not the old `dds.dll` / `libdds.so`. Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md). The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine.
+> **Double-dummy solver:** BEN runs its double-dummy solves on one of two backends:
+> - **dds3** (DDS 3.1, the default everywhere ddfast is not built). Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md).
+> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it with `bash build_native.sh`, or by hand from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC solves on it too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
+>
+> - **PIMC engine (Linux and macOS, optional):** a C++ port of BGADLL with ddfast as its solver, built by `bash build_native.sh`, or by hand from the `extern/bgadll-cpp` submodule ([randalburns/bgadll-cpp](https://github.com/randalburns/bgadll-cpp)): `git submodule update --init extern/bgadll-cpp`, `sh extern/bgadll-cpp/build.sh`. Once built, BEN loads it in place of the C# BGADLL; same results, faster PIMC.
+>
+> `BEN_DDS=dds3` or `BEN_DDS=ddfast` forces BEN's backend, `BEN_BGADLL=cpp` or `csharp` picks the PIMC engine, and `BEN_PIMC_DDS=haglund` keeps PIMC on the vendored DDS library; `preflight.py` reports which is in use. The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine. The Docker images and Windows builds use dds3. Details: [src/ddsolver/README.md](src/ddsolver/README.md).
 
 #### Running natively on Linux (including WSL)
 
 Docker users need to do nothing — the image is built on Ubuntu 24.04 / Python 3.12. For a **native** (non-Docker) Linux install, note that the vendored native libraries require:
 
 - **glibc ≥ 2.34** — i.e. Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+. `bin/dds3-linux/_dds3.so` itself needs only glibc 2.25; the 2.34 floor comes from `libEPBot.so` (BBA) and `BGADLL.so` (PIMC). On an older distro they fail to load with `version 'GLIBC_2.34' not found`.
-- **Python 3.12** — the `dds3` extension is locked to the CPython minor version.
+- **Python 3.12** — the `dds3` extension is locked to the CPython minor version (ddfast's module works on 3.12 and later).
+- **For ddfast:** an x86-64 CPU with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later), clang++ or g++ with C++20, and about 1.2 GB of memory for its tables.
+
+**NVIDIA GPU (optional).** The neural networks run on an NVIDIA GPU when TensorFlow's CUDA libraries are installed in BEN's environment:
+
+```bash
+pip install "tensorflow[and-cuda]==2.21.0"
+```
+
+BEN then uses the GPU automatically (`src/nn/tf_guard.py` takes GPU memory as needed rather than all of it, and loads cuSOLVER, which TensorFlow 2.21's pip packages otherwise fail to find). `CUDA_VISIBLE_DEVICES=-1` keeps it on the CPU. GPUs newer than TensorFlow's build, such as the RTX 50 series, have their kernels compiled by the driver on first use (about 15 s), then cached. On an RTX 5070 Laptop GPU, 8 boards took 82 s instead of 165 s on the CPU (the bidder network 8× faster). BEN turns off the GPU's TF32 matrix arithmetic (`NVIDIA_TF32_OVERRIDE=0`, set in `tf_guard.py`; `BEN_TF32=1` keeps it): with TF32, 3 of 8 test boards were bid or played differently from a CPU run.
+
+For the fastest GPU play, `--config config/gpu.conf` runs default.conf's networks on ONNX Runtime (`pip install onnxruntime-gpu` from Microsoft's CUDA 12 feed): the card play, lead, contract and single/double-dummy networks from their ONNX files (the same weights), and the bidder and bid info networks from default.conf's `.keras` files, which `src/nn/lstm_onnx.py` rebuilds in memory as ONNX graphs with native LSTM nodes (`bidding_runtime = onnx`). The networks then take 8 s instead of 26 s per 8 boards, and the decisions match a CPU run of default.conf. `src/nn/onnx_config.py` documents the GPU settings (`BEN_ONNX_DEVICE`, `BEN_ONNX_GPU_ARENA`, `BEN_ONNX_LSTM`, `BEN_ONNX_GPU_CHUNK`).
 
 **WSL quick start (Ubuntu 24.04)** — the simplest way to run/test the Linux build outside Docker.
 

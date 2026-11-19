@@ -5,7 +5,7 @@ Drop-in replacement for bid_info_tf2.py with faster inference.
 
 import numpy as np
 from nn.timing import ModelTimer
-from nn.onnx_config import create_session
+from nn.onnx_config import create_session, input_dtype
 
 
 class BidInfo:
@@ -15,6 +15,8 @@ class BidInfo:
         self.model_path = model_path
         self.session = create_session(model_path)
         self.input_name = self.session.get_inputs()[0].name
+        # float16 for the native-LSTM graphs, which take BEN's float16 inputs as they are
+        self.input_dtype = input_dtype(self.session)
 
     def pred_fun(self, x):
         """
@@ -28,6 +30,6 @@ class BidInfo:
             out_shape_seq: numpy array of shape [batch, seq_len, 12]
         """
         with ModelTimer.time_call('bidinfo'):
-            x_input = np.asarray(x, dtype=np.float32)
+            x_input = np.asarray(x, dtype=self.input_dtype)
             results = self.session.run(None, {self.input_name: x_input})
         return results[0], results[1]

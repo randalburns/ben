@@ -262,16 +262,15 @@ per call (ddfast keeps its search state per OS thread), no 8-call limit on
 concurrent solves, ddfast's `card_results` (every card in one call) instead of
 `SolveBoardPBN`, and a condition variable instead of 10 ms polling.
 
-On 8 boards (`christy170a.pbn`, seed 42), run back to back on the same machine,
-both on ddfast, results identical:
+On 8 boards (`christy170a.pbn`, seed 42), run back to back on AC power, both on
+ddfast, TensorFlow on the CPU, results identical:
 
 | | C# BGADLL (ddfast's `libdds.so`) | C++ port |
 |---|---|---|
-| PIMC, 192 calls | 28.4 s (148 ms per call) | 14.7 s (76 ms per call), 1.9× faster |
-| Whole run | 325 s | 301 s |
+| PIMC, 192 calls | 20.8 s (108 ms per call) | 13.1 s (68 ms per call), 1.6× faster |
+| Whole run | 174.6 s | 164.7 s |
 
-These were measured on battery power, where the CPU is power-limited, so every
-number is higher than on AC; the ratio is the comparison to use.
+(On battery, with the CPU power-limited: 148 against 76 ms per call, 1.9×.)
 
 ## The DDS C library used by the C# BGADLL
 

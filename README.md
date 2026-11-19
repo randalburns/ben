@@ -56,6 +56,14 @@ Docker users need to do nothing — the image is built on Ubuntu 24.04 / Python 
 - **Python 3.12** — the `dds3` extension is locked to the CPython minor version (ddfast's module works on 3.12 and later).
 - **For ddfast:** an x86-64 CPU with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later), clang++ or g++ with C++20, and about 1.2 GB of memory for its tables.
 
+**NVIDIA GPU (optional).** The neural networks run on an NVIDIA GPU when TensorFlow's CUDA libraries are installed in BEN's environment:
+
+```bash
+pip install "tensorflow[and-cuda]==2.21.0"
+```
+
+BEN then uses the GPU automatically (`src/nn/tf_guard.py` takes GPU memory as needed rather than all of it, and loads cuSOLVER, which TensorFlow 2.21's pip packages otherwise fail to find). `CUDA_VISIBLE_DEVICES=-1` keeps it on the CPU. GPUs newer than TensorFlow's build, such as the RTX 50 series, have their kernels compiled by the driver on first use (about 15 s), then cached. On an RTX 5070 Laptop GPU, 8 boards took 82 s instead of 165 s on the CPU (the bidder network 8× faster). The GPU rounds 16-bit arithmetic differently from the CPU, so a few decisions can come out differently from a CPU run.
+
 **WSL quick start (Ubuntu 24.04)** — the simplest way to run/test the Linux build outside Docker.
 
 Fully automated, from **Windows PowerShell** in the repo root — [setup_wsl.ps1](setup_wsl.ps1) installs the distro (if needed) and then runs the Linux provisioning inside it:

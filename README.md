@@ -33,9 +33,11 @@ For __Ubuntu__ users: you might have to install libboost using `sudo apt install
 
 > **Double-dummy solver:** BEN runs its double-dummy solves on one of two backends:
 > - **dds3** (DDS 3.1, the default everywhere ddfast is not built). Prebuilt copies are vendored per platform under `bin/dds3-win/`, `bin/dds3-linux/`, `bin/dds3-darwin/` and are loaded automatically. Each is a compiled extension **locked to Python 3.12**; to use a different Python or build for an unsupported platform, see [src/ddsolver/README.md](src/ddsolver/README.md).
-> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC uses ddfast's `libdds.so` too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
+> - **ddfast** (Linux x86-64 with AVX-512, optional, about 4× faster on BEN's workload with the same results). Build it from the `extern/ddfast` submodule: `git submodule update --init --recursive extern/ddfast`, `pip install nanobind`, `sh extern/ddfast/python/build.sh`. Once built, BEN uses it automatically, and PIMC solves on it too. The first run builds its 1.1 GB endgame tables (about 3 minutes).
 >
-> `BEN_DDS=dds3` or `BEN_DDS=ddfast` forces BEN's backend, and `BEN_PIMC_DDS=haglund` keeps PIMC on the vendored DDS library; `preflight.py` reports which is in use. The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine. The Docker images and Windows builds use dds3. Details: [src/ddsolver/README.md](src/ddsolver/README.md).
+> - **PIMC engine (Linux, optional):** a C++ port of BGADLL with ddfast as its solver, from the `extern/BGA` submodule: `git submodule update --init extern/BGA`, `sh extern/BGA/BGADLL.Cpp/build.sh`. Once built, BEN loads it in place of the C# BGADLL; same results, faster PIMC.
+>
+> `BEN_DDS=dds3` or `BEN_DDS=ddfast` forces BEN's backend, `BEN_BGADLL=cpp` or `csharp` picks the PIMC engine, and `BEN_PIMC_DDS=haglund` keeps PIMC on the vendored DDS library; `preflight.py` reports which is in use. The `libdds` libraries kept under `bin/` are used only by the BGADLL/PIMC engine. The Docker images and Windows builds use dds3. Details: [src/ddsolver/README.md](src/ddsolver/README.md).
 
 #### Running natively on Linux (including WSL)
 

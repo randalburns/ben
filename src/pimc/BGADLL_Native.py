@@ -2,6 +2,11 @@
 Native ctypes wrapper for BGADLL - provides the same interface as the pythonnet
 classes (PIMC, PIMCDef, Hand, Play, Card, Constraints, Extensions, Macros)
 so that PIMC.py and PIMCDef.py can work on all platforms without pythonnet.
+
+Two engines have the same C ABI (the bga_* functions):
+  cpp     the C++ port (extern/BGA/BGADLL.Cpp, Linux), solving on ddfast
+  csharp  BGADLL.Native (NativeAOT C#) under bin/BGA, solving on a libdds
+BEN_BGADLL=cpp|csharp picks one; unset, the C++ port if it is built.
 """
 import ctypes
 import os
@@ -46,14 +51,48 @@ def _find_native_lib():
     return os.path.join(bin_folder, 'BGA', platform_dir, arch, lib_name)
 
 
-_lib_path = _find_native_lib()
+def _find_cpp_lib():
+    """The C++ port of BGADLL (extern/BGA, branch cpp-ddfast-port, built by
+    BGADLL.Cpp/build.sh): the same C ABI as the C# library, with ddfast as its
+    double-dummy solver. Linux only; None if it is not built."""
+    if not sys.platform.startswith('linux'):
+        return None
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    roots = [os.path.abspath(os.path.join(script_dir, '..', '..')),   # repo: src/pimc -> <repo>
+             os.path.abspath(os.path.join(script_dir, '..'))]         # flattened: /app/pimc -> /app
+    if os.getenv('BEN_HOME'):
+        roots.append(os.getenv('BEN_HOME'))
+    for root in roots:
+        path = os.path.join(root, 'extern', 'BGA', 'BGADLL.Cpp', 'bin', 'BGADLL.so')
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _choose_engine():
+    """BEN_BGADLL=cpp or csharp picks the PIMC engine; unset, the C++ port if it is
+    built, else the C# library under bin/BGA."""
+    choice = os.getenv('BEN_BGADLL', '').strip().lower()
+    if choice not in ('', 'cpp', 'csharp'):
+        raise ValueError(f"BEN_BGADLL={choice!r}: use 'cpp' or 'csharp' (or leave it unset)")
+    cpp = _find_cpp_lib()
+    if choice == 'cpp' and cpp is None:
+        raise FileNotFoundError("BEN_BGADLL=cpp but extern/BGA/BGADLL.Cpp/bin/BGADLL.so is not built "
+                                "(git submodule update --init extern/BGA; sh extern/BGA/BGADLL.Cpp/build.sh)")
+    if choice != 'csharp' and cpp is not None:
+        return 'cpp', cpp
+    return 'csharp', _find_native_lib()
+
+
+# engine: "cpp" (the C++ port) or "csharp" (BGADLL.Native, NativeAOT C#).
+engine, _lib_path = _choose_engine()
 _lib = None
-# The DDS library BGADLL ended up with: "ddfast" or the path of the libdds preloaded.
+# The double-dummy solver BGADLL ended up with: "ddfast", or the path of the libdds it uses.
 dds_library = None
 
 
 def _preload_ddfast_libdds():
-    """Preload ddfast's libdds.so (DDS's C interface on ddfast) so BGADLL's
+    """C# engine: preload ddfast's libdds.so (DDS's C interface on ddfast) so BGADLL's
     [DllImport("dds")] binds to it: the loader matches the request to the library
     already loaded under the soname libdds.so, and the old libdds beside BGADLL is
     never opened. It shares libddfast.so (solver and tables) with BEN's DDSolver.
@@ -74,8 +113,48 @@ def _preload_ddfast_libdds():
     return True
 
 
+def _vendored_libdds():
+    """The DDS library shipped beside the C# BGADLL (DDS 3.1.0 on Linux x64)."""
+    machine = platform.machine().lower()
+    arch = 'arm64' if machine in ('aarch64', 'arm64') else 'x64'
+    path = os.path.join(os.path.dirname(os.path.abspath(_find_native_lib())), '..', arch, 'libdds.so')
+    path = os.path.abspath(path)
+    return path if os.path.isfile(path) else None
+
+
+def _setup_cpp_solver():
+    """Point the C++ port at its solvers before it is loaded. It opens them itself
+    (dlopen), using a library already in the process first: BEN's DDSolver has
+    loaded libddfast.so, so PIMC shares its tables. BEN_PIMC_DDS=haglund makes it use
+    the vendored DDS library instead (BGA_DDS_BACKEND=haglund); the vendored library
+    is also its fallback when ddfast is not available."""
+    try:
+        from ddsolver.ddsolver import ddfast_libddfast   # loads libddfast.so, sets DDFAST_TABLES
+        libddfast = ddfast_libddfast()
+    except ImportError:
+        libddfast = None
+    if libddfast:
+        os.environ.setdefault('BGA_DDFAST_LIB', libddfast)
+    libdds = _vendored_libdds()
+    if libdds:
+        os.environ.setdefault('BGA_DDS_LIB', libdds)
+    if os.getenv('BEN_PIMC_DDS', '').lower() == 'haglund':
+        os.environ.setdefault('BGA_DDS_BACKEND', 'haglund')
+
+
+def _cpp_backend(lib):
+    lib.bga_dds_backend.argtypes = []
+    lib.bga_dds_backend.restype = c_void_p
+    name = ctypes.string_at(lib.bga_dds_backend()).decode('utf-8', 'replace')
+    if name == 'haglund':
+        return os.getenv('BGA_DDS_LIB') or 'libdds.so'
+    return name
+
+
 def _get_lib():
     global _lib, dds_library
+    if _lib is None and engine == 'cpp':
+        return _get_cpp_lib()
     if _lib is None:
         if not os.path.isfile(_lib_path):
             raise FileNotFoundError(f"BGADLL native library not found: {_lib_path}")
@@ -129,6 +208,15 @@ def _get_lib():
                     break
         _lib = ctypes.CDLL(_lib_path)
         _setup_functions(_lib)
+    return _lib
+
+
+def _get_cpp_lib():
+    global _lib, dds_library
+    _setup_cpp_solver()
+    _lib = ctypes.CDLL(_lib_path)
+    _setup_functions(_lib)
+    dds_library = _cpp_backend(_lib)
     return _lib
 
 

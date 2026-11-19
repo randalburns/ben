@@ -97,11 +97,14 @@ def check_pimc_dds(required):
     lib.bga_dds_backend.restype = ctypes.c_void_p
     backend = ctypes.string_at(lib.bga_dds_backend()).decode("utf-8", "replace")
 
-    if not backend.startswith("error"):
-        # BGADLL calls its DDS backend "haglund" whichever libdds it bound to:
-        # ddfast's (the default on Linux) or the vendored DDS one.
+    if not backend.startswith("error") and backend != "none":
+        # The C# BGADLL calls its DDS backend "haglund" whichever libdds it bound
+        # to (ddfast's, the default on Linux, or the vendored DDS one); the C++
+        # port says "ddfast" or "haglund" for the solver it opened itself.
         library = native.dds_library or "library not preloaded"
-        report(OK, f"PIMC DDS backend: {backend} on {library}")
+        name = "C++ port" if native.engine == "cpp" else "C#"
+        where = "" if library == backend else f" on {library}"
+        report(OK, f"PIMC engine: BGADLL {name} - DDS backend: {backend}{where}")
         return
 
     details = [

@@ -2,3 +2,7 @@
 	path = extern/ddfast
 	url = https://github.com/randalburns/ddfast.git
 	branch = dds-capi
+[submodule "extern/BGA"]
+	path = extern/BGA
+	url = https://github.com/randalburns/BGA.git
+	branch = cpp-ddfast-port

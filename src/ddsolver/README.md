@@ -29,8 +29,8 @@ BEN_DDS=dds3     # the vendored dds3
 and so do `preflight.py` (`double dummy solver: ...`) and the header of a
 `--ddsrecord` recording.
 
-PIMC (BGADLL) picks its DDS library separately, with `BEN_PIMC_DDS`: see
-[The DDS C library used by PIMC](#the-dds-c-library-used-by-pimc-bgadll).
+PIMC (BGADLL) picks its engine and solver separately, with `BEN_BGADLL` and
+`BEN_PIMC_DDS`: see [PIMC engines](#pimc-engines-the-c-port-or-the-c-bgadll).
 
 The Docker images and the Windows PyInstaller builds only ship dds3 (they do not
 build the submodule), so they run on dds3.
@@ -99,9 +99,10 @@ extension instead of the old `ctypes`-loaded `dds.dll` / `libdds.so`.
 | `bin/ddss.dll` / `.exp` / `.lib`           | removed (ddss fast-fork dropped)              |
 
 > **Note:** `bin/dds.dll`, `bin/libdds.so` and `bin/darwin/libdds.2.9.0.dylib`
-> are **kept** — they are not used by `ddsolver`, but the BGADLL / PIMC
-> native engine (`src/pimc/BGADLL_Native.py`) calls the DDS C ABI and
-> may preload them. See [The DDS C library used by PIMC](#the-dds-c-library-used-by-pimc-bgadll).
+> are **kept** — they are not used by `ddsolver`, but the C# BGADLL (PIMC)
+> calls the DDS C ABI and `src/pimc/BGADLL_Native.py` may preload them, and the
+> C++ port falls back to them without ddfast. See
+> [The DDS C library used by the C# BGADLL](#the-dds-c-library-used-by-the-c-bgadll).
 
 **Concurrency.** On dds3, `DDSolver` runs a Python `ThreadPoolExecutor` and issues one
 `dds3.solve_board_pbn(..., context=ctx)` per board, keeping **one `SolverContext`
@@ -221,9 +222,60 @@ The Docker images expect option 2 (`bin/dds3-linux/`). PyInstaller builds
 expect option 1 (`dds3` installed in the build environment; the `.spec` files
 list it under `hiddenimports`).
 
-## The DDS C library used by PIMC (BGADLL)
+## PIMC engines: the C++ port or the C# BGADLL
 
-BGADLL (PIMC / PIMCDef) does not use `DDSolver`'s backend. On every platform
+PIMC and PIMCDef come from BGADLL ([ThorvaldAagaard/BGA](https://github.com/ThorvaldAagaard/BGA),
+MIT). BEN can load either of two builds with the same C interface (the 61 `bga_*`
+functions `src/pimc/BGADLL_Native.py` binds):
+
+| Engine | What | Solver |
+|--------|------|--------|
+| **cpp** (the default when built) | A C++ port, `extern/BGA/BGADLL.Cpp` ([randalburns/BGA](https://github.com/randalburns/BGA), branch `cpp-ddfast-port`); Linux x86-64 | ddfast (`ddfast::card_results`, in the `libddfast.so` BEN already loaded, so one copy of the tables), else the vendored `libdds` |
+| **csharp** | BGADLL.Native (NativeAOT C#), `bin/BGA/<os>/<arch>/BGADLL.*`; every platform | a `libdds` it loads by name: see the next section |
+
+```bash
+BEN_BGADLL=cpp      # the C++ port; fails if it is not built
+BEN_BGADLL=csharp   # the C# library
+                    # unset: the C++ port if it is built, else the C# library
+BEN_PIMC_DDS=haglund   # either engine: solve on the vendored DDS library instead of ddfast
+```
+
+Build the port:
+
+```bash
+git submodule update --init extern/BGA
+sh extern/BGA/BGADLL.Cpp/build.sh      # -> extern/BGA/BGADLL.Cpp/bin/BGADLL.so (g++, C++17)
+```
+
+`preflight.py` shows which engine and solver PIMC got, e.g.
+`PIMC engine: BGADLL C++ port - DDS backend: ddfast`. If ddfast is not built the port
+falls back to the vendored `libdds` by itself (BEN points it there with
+`BGA_DDS_LIB`); the port's own settings (`BGA_DDS_BACKEND`, `BGA_DDFAST_LIB`,
+`BGA_DDS_LIB`) are described in its README.
+
+The port makes the same samples in the same order as the C# library (same seed,
+same shuffle, same constraints and weights), so it returns the same results:
+byte-identical on 303 positions in its own tests, and in BEN the same output on
+`src/test_pimc_native.py`'s position and the same contracts and tricks on 8 boards.
+What differs is the machinery: one persistent worker pool instead of new threads
+per call (ddfast keeps its search state per OS thread), no 8-call limit on
+concurrent solves, ddfast's `card_results` (every card in one call) instead of
+`SolveBoardPBN`, and a condition variable instead of 10 ms polling.
+
+On 8 boards (`christy170a.pbn`, seed 42), run back to back on the same machine,
+both on ddfast, results identical:
+
+| | C# BGADLL (ddfast's `libdds.so`) | C++ port |
+|---|---|---|
+| PIMC, 192 calls | 28.4 s (148 ms per call) | 14.7 s (76 ms per call), 1.9× faster |
+| Whole run | 325 s | 301 s |
+
+These were measured on battery power, where the CPU is power-limited, so every
+number is higher than on AC; the ratio is the comparison to use.
+
+## The DDS C library used by the C# BGADLL
+
+The C# BGADLL (PIMC / PIMCDef) does not use `DDSolver`'s backend. On every platform
 except Windows x64 (which uses `libbcalcdds.dll`) it calls the DDS **C ABI**
 (`SolveBoardPBN`, `SetMaxThreads`, `ErrorMessage`) from a library it loads by
 name (`[DllImport("dds")]`): `libdds.so` on Linux. `BGADLL_Native.py` preloads
@@ -231,7 +283,8 @@ that library before BGADLL, and BGADLL binds to the one already loaded.
 
 ### ddfast's libdds.so (Linux, the default when built)
 
-When `extern/ddfast/python/ddfast/libdds.so` is built (see
+With the C# engine (`BEN_BGADLL=csharp`, or the C++ port not built), when
+`extern/ddfast/python/ddfast/libdds.so` is built (see
 [Using ddfast](#using-ddfast)), BEN preloads it in place of the vendored file, so
 PIMC solves on ddfast too:
 

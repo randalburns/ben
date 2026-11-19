@@ -116,10 +116,50 @@ class Sample:
         self.sample_previous_round_if_needed = sample_previous_round_if_needed
 
         self.verbose = verbose
+        self._row_cache = {}
+        self._row_cache_entries = 0
+
+    # Rows kept in the per-board cache before it is emptied, to bound its memory
+    ROW_CACHE_MAX_ENTRIES = 2_000_000
 
     def clear_sample_cache(self):
-        """Stub method for cache clearing. No caching currently implemented."""
-        pass
+        """Forget the per-row results cached for the previous board."""
+        self._row_cache = {}
+        self._row_cache_entries = 0
+
+    def cached_rows(self, context, rows, compute):
+        """One result per row of rows (a 2D array), computed by compute(rows_subset), which
+        must return one result per row. A row's result does not depend on the other rows in
+        the batch (the networks predict every row on its own, and give bit-identical
+        results for any batch), so results are kept for the board: context must hold
+        everything else the result depends on (model, seat, auction, vulnerability, ...).
+        Each distinct new row is computed once, in one batch.
+        The exception is a batch of one row: TensorFlow takes another kernel for it, which
+        can differ in the last bit, so single rows are cached apart from batched rows, and a
+        single new row of a larger batch is computed in a batch of two."""
+        single = rows.shape[0] == 1
+        context = (context, single)
+        cache = self._row_cache.get(context)
+        if cache is None:
+            if self._row_cache_entries > self.ROW_CACHE_MAX_ENTRIES:
+                self.clear_sample_cache()
+            cache = self._row_cache.setdefault(context, {})
+        flat = np.ascontiguousarray(rows).reshape(rows.shape[0], -1)
+        keys = [row.tobytes() for row in flat]
+        missing = {}
+        for i, key in enumerate(keys):
+            if key not in cache and key not in missing:
+                missing[key] = i
+        if missing:
+            index = list(missing.values())
+            if len(index) == 1 and not single:
+                results = compute(rows[index * 2])[:1]
+            else:
+                results = compute(rows[index])
+            for key, result in zip(missing, results):
+                cache[key] = result
+            self._row_cache_entries += len(missing)
+        return np.array([cache[key] for key in keys])
 
     @classmethod
     def from_conf(cls, conf: ConfigParser, verbose=False) -> "Sample":
@@ -1028,6 +1068,12 @@ class Sample:
 
     def get_opening_lead_scores_nn(self, auction, vuln, models, handsamples, opening_lead_card):
         assert(handsamples.shape[1] == models.n_cards_play)
+        # The score depends only on the leader's hand, which comes back at every card of the board
+        context = ('lead_scores_nn', tuple(auction), tuple(vuln), opening_lead_card)
+        return self.cached_rows(context, handsamples,
+                                lambda hands: self.compute_opening_lead_scores_nn(auction, vuln, models, hands, opening_lead_card))
+
+    def compute_opening_lead_scores_nn(self, auction, vuln, models, handsamples, opening_lead_card):
         cards_in_suit = models.n_cards_play // 4
         #handsamples = handsamples[:1,:]
         contract = bidding.get_contract(auction)
@@ -1100,7 +1146,6 @@ class Sample:
         return lead_softmax[:, opening_lead_card]
 
     def get_bid_scores(self, nesw_i, partner, auction, vuln, sample_hands, models):
-        n_steps = binary.calculate_step_bidding(auction)
         if self.verbose:
             print(f"Get bid scores for samples for {nesw_i}. First hand {hand_to_str(sample_hands[0])}")
 
@@ -1110,6 +1155,16 @@ class Sample:
         else:
             handbidding = sample_hands
 
+        # The score depends only on the hand (with the pips grouped as the bidder sees them),
+        # and the same hands come back at every card of the board
+        model = models.bidder_model if partner else models.opponent_model
+        context = ('bid_scores', id(model), nesw_i, tuple(auction), tuple(vuln))
+        return self.cached_rows(context, handbidding,
+                                lambda hands: self.compute_bid_scores(nesw_i, partner, auction, vuln, hands, models)).astype(np.float32, copy=False)
+
+    def compute_bid_scores(self, nesw_i, partner, auction, vuln, handbidding, models):
+        n_steps = binary.calculate_step_bidding(auction)
+        sample_hands = handbidding
 
         A = binary.get_auction_binary_sampling(n_steps, auction, nesw_i, handbidding, vuln, models, models.n_cards_bidding)
 

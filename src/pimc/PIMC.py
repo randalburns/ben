@@ -155,6 +155,13 @@ class BGADLL:
         PIMC = dll["PIMC"]
         return PIMC().version()
 
+    def engine(self):
+        """The BGADLL engine in use: "C++ port", "C#" (NativeAOT), or ".NET" (pythonnet)."""
+        if USE_NATIVE_BGA:
+            from pimc import BGADLL_Native
+            return "C++ port" if BGADLL_Native.engine == "cpp" else "C#"
+        return ".NET"
+
     def dds_backend(self):
         if USE_NATIVE_BGA:
             try:

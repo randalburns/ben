@@ -496,19 +496,25 @@ class DDSolver:
         else:
             card_results = {}
             for fut in solved:
+                suits = fut["suit"]
+                ranks = fut["rank"]
+                scores = fut["score"]
+                equals = fut["equals"]
                 for i in range(fut["cards"]):
-                    suit_i = fut["suit"][i]
-                    card = suit_i * 13 + 14 - fut["rank"][i]
+                    suit_i = suits[i]
+                    score = scores[i]
+                    card = suit_i * 13 + 14 - ranks[i]
                     if card not in card_results:
                         card_results[card] = []
-                    card_results[card].append(fut["score"][i])
-                    eq_cards_encoded = fut["equals"][i]
-                    for k, rank_code in enumerate(card_rank):
-                        if rank_code & eq_cards_encoded > 0:
-                            eq_card = suit_i * 13 + k
-                            if eq_card not in card_results:
-                                card_results[eq_card] = []
-                            card_results[eq_card].append(fut["score"][i])
+                    card_results[card].append(score)
+                    eq_cards_encoded = equals[i]
+                    if eq_cards_encoded:
+                        for k, rank_code in enumerate(card_rank):
+                            if rank_code & eq_cards_encoded > 0:
+                                eq_card = suit_i * 13 + k
+                                if eq_card not in card_results:
+                                    card_results[eq_card] = []
+                                card_results[eq_card].append(score)
 
         return card_results
 

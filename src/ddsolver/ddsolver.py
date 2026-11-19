@@ -271,13 +271,26 @@ if _GEVENT:
     from gevent.threadpool import ThreadPoolExecutor as _NativeThreadPoolExecutor
 
 
+def _available_cpus():
+    """The CPUs this process may run on (its affinity), or all of them where that is unknown."""
+    try:
+        return len(os.sched_getaffinity(0)) or (os.cpu_count() or 4)
+    except (AttributeError, OSError):
+        return os.cpu_count() or 4
+
+
 class _DDFastBackend:
     """A batch is one solve_boards_pbn call: ddfast solves the boards on its own threads
     with the GIL released once, and keeps its search state per thread by itself."""
 
     def __init__(self, max_threads, verbose):
-        self.max_threads = max_threads if (max_threads and max_threads > 0) else 0
-        self.workers = self.max_threads or (os.cpu_count() or 4)
+        if not (max_threads and max_threads > 0):
+            # 0 = one thread per CPU this process may run on. ddfast's own 0 is every CPU of
+            # the machine, which oversubscribes a process confined to fewer (taskset, a
+            # container's cpuset). The double dummy results do not depend on the threads.
+            max_threads = _available_cpus()
+        self.max_threads = max_threads
+        self.workers = self.max_threads
         # Under gevent: a few native threads so concurrent requests can each have a
         # batch in flight (each batch is itself spread over ddfast's threads).
         self._gevent_pool = _NativeThreadPoolExecutor(max_workers=4) if _GEVENT else None

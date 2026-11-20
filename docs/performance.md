@@ -92,7 +92,7 @@ The original fork (step 0) plays the same contracts:
 - **PC:** the same results; 5 spot cards on 2 boards differ, each a choice between small
   cards of equal double-dummy value.
 - **M5:** the play differs on 5 of the 8 boards, and on one of them (3NT) declarer takes
-  10 tricks instead of 11.
+  10 tricks instead of 11.[^dds3]
 
 ## To run it
 
@@ -114,3 +114,9 @@ On macOS, the original C# BGADLL (steps 0 and 1) only finds its DDS library with
   Python speedups, which didn't justify a second implementation to maintain.
 - **Trade-offs that change decisions:** stopping bid sampling early in long auctions
   (about 11% per board) and lower-precision GPU arithmetic.
+
+[^dds3]: On every board, the first card that differs is a different but equivalent card
+    in the same suit (on the 3NT board, South's ♥5 or ♥2 at trick 1). BEN's own solver,
+    dds3 at step 0 and ddfast after, breaks ties between equal cards differently; today's
+    code with `BEN_DDS=dds3` reproduces step 0's PBN byte for byte. On the M5 one of
+    those choices led the later play down a different path that cost a trick.

@@ -13,6 +13,13 @@ import onnxruntime as ort
 
 from nn.lstm_onnx import input_dtype  # noqa: F401 (for the model wrappers)
 
+def _cpu_threads():
+    value = os.getenv('BEN_ONNX_THREADS', '1').strip()
+    if not value.isdigit():
+        raise ValueError(f"BEN_ONNX_THREADS={value!r}: use a number of threads (0: ONNX Runtime's default)")
+    return int(value)
+
+
 # Global session options - shared by all ONNX models
 def get_session_options():
     """Get optimized session options for ONNX Runtime."""
@@ -22,9 +29,12 @@ def get_session_options():
     sess_options.enable_mem_pattern = True
     sess_options.enable_cpu_mem_arena = True
 
-    # Thread settings - limit to prevent contention
-    # Use 1 thread per model to avoid contention with multiple models
-    sess_options.intra_op_num_threads = 1
+    # Threads per network call on the CPU. The default, 1, is what BEN has always
+    # used. BEN_ONNX_THREADS=n uses n; 0 leaves the choice to ONNX Runtime. On a
+    # 12-core x86 PC the bidding network ran about 4.7 times faster with 12 threads
+    # than with 1 (docs/performance.md). With several BEN processes on one machine,
+    # keep n times the number of processes within the number of cores.
+    sess_options.intra_op_num_threads = _cpu_threads()
     sess_options.inter_op_num_threads = 1
 
     # Execution mode - sequential is often faster for small batches

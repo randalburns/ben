@@ -3,6 +3,8 @@
 This is a game engine for [bridge](https://en.wikipedia.org/wiki/Contract_bridge).
 It can be used as a robot player, to do analysis, or to develop AI for bridge.
 
+> **About this fork.** This is a fork of [lorserker/ben](https://github.com/lorserker/ben) with performance changes: a faster double-dummy solver, a C++ PIMC engine, less repeated work in sampling, and the neural networks on ONNX Runtime or an NVIDIA GPU. A board plays 2.3 to 6.7 times faster, depending on the hardware, with the same bids and cards apart from the exceptions listed. [docs/performance.md](docs/performance.md) has the measurements, what each change does, and its limits.
+
 The engine is built using machine learning (neural networks) and a double dummy solver: [DDS](https://github.com/dds-bridge/dds) through its `dds3` Python extension, or on Linux optionally [ddfast](https://github.com/randalburns/ddfast) (see [src/ddsolver/README.md](src/ddsolver/README.md)).
 
 To get a first impression of how the engine plays, please take a look at the [demo](https://lorserker.github.io/ben/demo/demo.html), or watch the bridge streamer Peter Hollands [demo the robot](https://www.youtube.com/watch?v=onG_V7vwxUk&t=150s) on IntoBridge.

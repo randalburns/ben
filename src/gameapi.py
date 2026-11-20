@@ -719,6 +719,36 @@ dds_max_threads = configuration.getint('dds', 'dds_max_threads', fallback=0)
 dds = DDSolver(max_threads=dds_max_threads)
 print(f"DDSolver enabled. Version {dds.version()} Max threads {dds_max_threads}")
 
+
+def _server_identity():
+    """What this server runs, for clients that must know which BEN they are playing (GET /):
+    BEN's version and source commit, its double-dummy solver, the PIMC engine and its solver,
+    and the sha256 of the config file it loaded."""
+    import hashlib
+    import subprocess
+    try:
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=os.path.dirname(os.path.abspath(__file__)),
+                                capture_output=True, text=True, timeout=10).stdout.strip() or None
+    except Exception:
+        commit = None
+    try:
+        with open(configfile, 'rb') as f:
+            config_sha = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        config_sha = None
+    pimc_on = bool(models.pimc_use_declaring or models.pimc_use_defending)
+    pimc_info = dict(enabled=pimc_on)
+    if pimc_on:
+        from pimc import PIMC as pimc_mod, BGADLL_Native
+        engine = BGADLL_Native.engine if pimc_mod.USE_NATIVE_BGA else 'dotnet'  # cpp, csharp or dotnet
+        pimc_info.update(engine=engine, version=pimc.version(), dds=pimc.dds_backend())
+    return dict(ben_version=version, source_commit=commit, ddsolver=dds.version(), pimc=pimc_info,
+                config_sha256=config_sha)
+
+
+server_identity = _server_identity()
+print(f"Server identity: {server_identity}")
+
 log_file_path = os.path.join(config_path, 'logs')
 if not os.path.exists(log_file_path):
     os.makedirs(log_file_path)
@@ -1000,6 +1030,7 @@ def home():
     result = {"name": models.name}
     if systems:
         result.update(systems.capabilities())
+    result["server"] = server_identity
     return jsonify(result)
 
 @app.errorhandler(UnknownName)

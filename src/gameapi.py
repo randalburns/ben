@@ -722,8 +722,9 @@ print(f"DDSolver enabled. Version {dds.version()} Max threads {dds_max_threads}"
 
 def _server_identity():
     """What this server runs, for clients that must know which BEN they are playing (GET /):
-    BEN's version and source commit, its double-dummy solver, the PIMC engine and its solver,
-    and the sha256 of the config file it loaded."""
+    BEN's version and source commit, its double-dummy solver, whether PIMC is on and, if so, its
+    engine (cpp: the C++ BGADLL, csharp: the C# library), version and solver, and the sha256 of
+    the config file loaded."""
     import hashlib
     import subprocess
     try:
@@ -739,8 +740,11 @@ def _server_identity():
     pimc_on = bool(models.pimc_use_declaring or models.pimc_use_defending)
     pimc_info = dict(enabled=pimc_on)
     if pimc_on:
-        from pimc import PIMC as pimc_mod, BGADLL_Native
-        engine = BGADLL_Native.engine if pimc_mod.USE_NATIVE_BGA else 'dotnet'  # cpp, csharp or dotnet
+        try:
+            import pimc.BGADLL_Native as bga_native
+            engine = getattr(bga_native, 'engine', None) or getattr(bga_native, 'bgadll_impl', None)
+        except ImportError:                 # Windows: BGADLL through pythonnet
+            engine = 'csharp'
         pimc_info.update(engine=engine, version=pimc.version(), dds=pimc.dds_backend())
     return dict(ben_version=version, source_commit=commit, ddsolver=dds.version(), pimc=pimc_info,
                 config_sha256=config_sha)

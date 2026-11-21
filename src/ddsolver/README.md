@@ -4,7 +4,7 @@ BEN's double-dummy solver wrapper, `DDSolver`, runs on one of three backends:
 
 | Backend | What it is | Platforms | Speed on BEN's workload |
 |---------|------------|-----------|-------------------------|
-| **ddfast** | An exact double-dummy solver with DDS 3.x's `dds3` Python interface, built from the `extern/ddfast` submodule ([randalburns/ddfast](https://github.com/randalburns/ddfast), branch `dds-capi`) | Linux x86-64 with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later); Python 3.12+ | about 4× dds3 |
+| **ddfast** | An exact double-dummy solver with DDS 3.x's `dds3` Python interface, built from the `extern/ddfast` submodule ([randalburns/ddfast](https://github.com/randalburns/ddfast), branch `main`) | Linux x86-64 (native AVX-512 on Zen 4/5 and Intel Ice Lake and later, else Google Highway), macOS ARM64 (Highway); Python 3.12+ | about 4× dds3 |
 | **bsolver** | bridge-solver ([BSalita/bridge-solver](https://github.com/BSalita/bridge-solver)) through its DDS-compatible C library, vendored under `bin/bsolver/` (see [bridge-solver](#bridge-solver)) | Windows x64, Linux x64/ARM64, macOS ARM64 | about 2× dds3 |
 | **dds3** | DDS 3.1's Python extension, vendored per platform under `bin/dds3-*` (built from the DDS **v3.1.0** tag, `fe6a6581`) | Windows, Linux, macOS; Python 3.12 only | baseline |
 

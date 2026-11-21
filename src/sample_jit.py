@@ -24,13 +24,24 @@ try:
         raise ImportError("disabled by BEN_NO_NUMBA")
     from numba import njit
     AVAILABLE = True
-except ImportError:
+except Exception:
+    # Not only ImportError: a numba that is installed but broken (e.g. llvmlite's DLL
+    # missing from a frozen build) must also fall back to the numpy loops
     AVAILABLE = False
+
+
+def _jit(fn):
+    """njit with an on-disk cache where possible. A PyInstaller exe has no source file
+    for numba to cache beside, and njit(cache=True) raises there, so compile uncached."""
+    try:
+        return njit(cache=True, nogil=True)(fn)
+    except Exception:
+        return njit(nogil=True)(fn)
 
 
 if AVAILABLE:
 
-    @njit(cache=True, nogil=True)
+    @_jit
     def _pick(xp, n, r):
         # distr_vec for one sample: xp holds the weights already clipped at 0 plus 0.1
         s = 0.0
@@ -48,7 +59,7 @@ if AVAILABLE:
             idx += 1
         return idx
 
-    @njit(cache=True, nogil=True)
+    @_jit
     def deal_round(rnd, order, js, r_shp, r_hcp, cards_received, hands, caps,
                    cards_in_suit, honors, update_hcp, hcp_dec, update_shp, shp_dec):
         """One dealing round over the samples with js[i] < order.shape[1].

@@ -1,31 +1,33 @@
 # Double-dummy solver (`ddsolver`)
 
-BEN's double-dummy solver wrapper, `DDSolver`, runs on one of two backends:
+BEN's double-dummy solver wrapper, `DDSolver`, runs on one of three backends:
 
 | Backend | What it is | Platforms | Speed on BEN's workload |
 |---------|------------|-----------|-------------------------|
 | **ddfast** | An exact double-dummy solver with DDS 3.x's `dds3` Python interface, built from the `extern/ddfast` submodule ([randalburns/ddfast](https://github.com/randalburns/ddfast), branch `dds-capi`) | Linux x86-64 with AVX-512 and BMI2 (Zen 4/5, Intel Ice Lake and later); Python 3.12+ | about 4× dds3 |
+| **bsolver** | bridge-solver ([BSalita/bridge-solver](https://github.com/BSalita/bridge-solver)) through its DDS-compatible C library, vendored under `bin/bsolver/` (see [bridge-solver](#bridge-solver)) | Windows x64, Linux x64/ARM64, macOS ARM64 | about 2× dds3 |
 | **dds3** | DDS 3.1's Python extension, vendored per platform under `bin/dds3-*` (built from the DDS **v3.1.0** tag, `fe6a6581`) | Windows, Linux, macOS; Python 3.12 only | baseline |
 
-Both return the same results: a 559-call recording of a real 8-board session
+All three return the same results: a 559-call recording of a real 8-board session
 (41,944 deals plus par) replays identically on both (see
 [Benchmarking](#benchmarking-record-a-real-session-replay-it)), taking 6.4 s on
 ddfast and 29.7 s on dds3 (24 threads). By purpose: card play 6×, bidding 3.8×,
 opening leads 3.7×, claim checks 10×, par 2×.
 
 `DDSolver`'s public API (`solve`, `calculatepar`, `version`,
-`expected_tricks_dds`, ...) is the same on both, so callers do not care which
+`expected_tricks_dds`, ...) is the same on all three, so callers do not care which
 one runs.
 
 ## Choosing the backend
 
 ```bash
-BEN_DDS=ddfast   # ddfast; fails at import if it is not built
-BEN_DDS=dds3     # the vendored dds3
-                 # unset: ddfast if it is built, else dds3
+BEN_DDS=ddfast    # ddfast; fails at import if it is not built
+BEN_DDS=bsolver   # bridge-solver; fails if there is no library for this platform
+BEN_DDS=dds3      # the vendored dds3
+                  # unset: ddfast if it is built, else bridge-solver, else dds3
 ```
 
-`DDSolver(...).version()` says which one is in use (`ddfast` or `dds3 3.1.0`),
+`DDSolver(...).version()` says which one is in use (`ddfast`, `bridge-solver` or `dds3 3.1.0`),
 and so do `preflight.py` (`double dummy solver: ...`) and the header of a
 `--ddsrecord` recording.
 
@@ -111,6 +113,47 @@ removed). `solve_board_pbn` releases the GIL during the search, so the pool runs
 truly in parallel and each thread's context keeps a warm transposition table.
 The deprecated `set_max_threads` / `solve_all_boards` bindings are **not** used
 (and no longer exist in current `dds3`).
+
+## bridge-solver
+
+Upstream BEN (0.9.0.4) solves on **bridge-solver**
+([BSalita/bridge-solver](https://github.com/BSalita/bridge-solver), branch
+`faster-search`, a fork of macroxue/bridge-solver) when its library is there, and
+on `dds3` otherwise; here it is the choice when ddfast is not built. bridge-solver ships a single-file library with DDS 2.9's C API;
+`ddsolver/bsolver.py` calls it through `ctypes` (`SolveAllBoards` for a batch, on
+the library's own threads; `CalcDDtablePBN` + `Par` for par).
+
+| Platform    | BEN's copy (`DDSolver`)                          |
+|-------------|--------------------------------------------------|
+| Windows x64 | `bin/bsolver/windows-x64/bsolver-dds.dll`        |
+| Linux x64   | `bin/bsolver/linux-x64/libbsolver-dds.so`        |
+| Linux ARM64 | `bin/bsolver/linux-arm64/libbsolver-dds.so`      |
+| macOS ARM64 | `bin/bsolver/macos-arm64/libbsolver-dds.dylib`   |
+| Windows ARM64 | none yet: `dds3`                               |
+
+- `BEN_DDS=dds3` forces dds3, `BEN_DDS=bsolver` requires bridge-solver;
+  `BEN_BSOLVER_LIB=<path>` loads another build.
+- BEN loads **its own copy**, not the `dds` library beside BGADLL: the library's
+  thread count is one global setting, and BGADLL sets it to 8.
+- **Measured** on a recording of 8 boards (527 solves, 41,268 deals) on an
+  i9-14900K: the same result as dds3 for every call, 2.1x faster on one thread,
+  2.3-2.5x at 32 threads, with less than half the CPU time.
+- **Decisions:** bridge-solver lists equal cards in another order than dds3, and
+  BEN's play breaks ties between equal cards by that order, so a game can play a
+  different one of two equal spot cards (8 boards: same contracts and results).
+
+**Building.** Windows: LLVM clang inside the MSVC x64 environment (vcvars64; it
+needs `vswhere`'s folder on PATH to set the UCRT library path), with
+`EXTRA_OPTS=-fuse-ld=lld MARCH=x86-64-v3 ./build.sh` in Git Bash; ship
+`build/dds-single.dll`, which needs nothing but KERNEL32. Linux: in
+`quay.io/pypa/manylinux_2_28_x86_64` (or `_aarch64` with `MARCH=armv8-a`),
+`EXTRA_OPTS="-static-libstdc++ -static-libgcc" MARCH=x86-64-v3 CXX=g++ ./build.sh`,
+then `strip --strip-unneeded build/libdds-single.so` (needs glibc 2.25+).
+macOS: `SDKROOT=<SDK> MACOSX_DEPLOYMENT_TARGET=11.0 bash ./build.sh` (with
+Command Line Tools whose own `include/c++/v1` is empty, add
+`EXTRA_OPTS="-nostdinc++ -isystem <SDK>/usr/include/c++/v1"`; with macOS's bash
+3.2, write the empty `"${SHARE_CRT[@]}"` as `${SHARE_CRT[@]+"${SHARE_CRT[@]}"}`),
+then `install_name_tool -id @rpath/<name>` and `codesign -f -s -` the copy.
 
 ## Installing the `dds3` extension
 
@@ -335,13 +378,19 @@ costs one branch per call.
 
 ### The vendored libraries
 
+On Windows x64 BGADLL would
+prefer `libbcalcdds.dll`; `BGADLL_Native.py` sets `BGA_DDS_BACKEND=haglund` (unless
+already set) so it uses the `dds` library there too: on 8 boards PIMC took 15.3 s
+on bridge-solver against 27.9 s on bcalcdds, with the same cards played.
+`BGA_DDS_BACKEND=bcalcdds` brings bcalcdds back.
+
 | Platform       | File                                   | DDS   |
 |----------------|----------------------------------------|-------|
-| Windows x64    | `bin/BGA/windows/x64/dds.dll` (fallback only) | 2.9.0 |
+| Windows x64    | `bin/BGA/windows/x64/dds.dll` (+ identical `bin/dds.dll`) | bridge-solver `61a6e59` |
 | Windows ARM64  | `bin/BGA/windows/arm64/dds.dll`        | 3.1.0 (`671a4aa4`) |
-| Linux x64      | `bin/BGA/linux/x64/libdds.so` (+ identical `dds.dll`, `bin/libdds.so`) | 3.1.0 (`671a4aa4`) |
-| Linux ARM64    | `bin/BGA/linux/arm64/libdds.so`        | 3.1.0 (`671a4aa4`) |
-| macOS ARM64    | `bin/BGA/macos/arm64/libdds.2.9.0.dylib` | 2.9.0 |
+| Linux x64      | `bin/BGA/linux/x64/libdds.so` (+ identical `dds.dll`, `bin/libdds.so`) | bridge-solver `61a6e59` |
+| Linux ARM64    | `bin/BGA/linux/arm64/libdds.so`        | bridge-solver `61a6e59` |
+| macOS ARM64    | `bin/BGA/macos/arm64/libdds.2.9.0.dylib` (+ identical `bin/darwin/`) | bridge-solver `61a6e59` (the file keeps its old name: BEN links `libdds.dylib` and `dds.dylib` to it) |
 
 > **The thread index must be accepted.** BGADLL spreads its solves over thread
 > indexes 0–7. DDS builds from before commit `15eb56fd` (2026-05-22) only accept

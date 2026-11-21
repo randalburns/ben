@@ -1,12 +1,14 @@
-"""BEN's double-dummy solver wrapper, on one of two backends:
+"""BEN's double-dummy solver wrapper, on one of three backends:
 
-  ddfast  an exact double-dummy solver with DDS 3.x's dds3 interface, built from the
-          extern/ddfast submodule (Linux x86-64 with AVX-512; Python 3.12+).
-  dds3    DDS 3.1's Python extension, vendored per platform under bin/dds3-*.
+  ddfast   an exact double-dummy solver with DDS 3.x's dds3 interface, built from the
+           extern/ddfast submodule (Python 3.12+).
+  bsolver  bridge-solver, through its DDS-compatible C library vendored under
+           bin/bsolver/<platform>-<arch>/ (see bsolver.py).
+  dds3     DDS 3.1's Python extension, vendored per platform under bin/dds3-*.
 
-BEN_DDS=ddfast or BEN_DDS=dds3 picks one; unset, ddfast is used when it is built and dds3
-otherwise. Both return the same results (see ddsreplay.py); DDSolver.version() names the one
-in use. PIMC (BGADLL) chooses its own DDS library separately - see ddfast_libdds() and
+BEN_DDS=ddfast, bsolver or dds3 picks one; unset, ddfast is used when it is built, else
+bridge-solver when its library is there, else dds3. All return the same results (see
+ddsreplay.py); DDSolver.version() names the one in use. PIMC (BGADLL) chooses its own DDS library separately - see ddfast_libdds() and
 pimc/BGADLL_Native.py.
 """
 import sys
@@ -158,17 +160,31 @@ except ImportError as _ex:
 
 
 def _choose_backend():
+    """(backend, bridge-solver library path or None). A backend BEN_DDS forces that is missing
+    is an error, not a silent fallback."""
+    from ddsolver.bsolver import find_library
     choice = (os.getenv("BEN_DDS") or "").strip().lower()
-    if choice not in ("", "ddfast", "dds3"):
-        raise ValueError(f"BEN_DDS={choice!r}: use 'ddfast' or 'dds3' (or leave it unset)")
+    if choice == "bridge-solver":
+        choice = "bsolver"
+    if choice not in ("", "ddfast", "bsolver", "dds3"):
+        raise ValueError(f"BEN_DDS={choice!r}: use 'ddfast', 'bsolver' or 'dds3' (or leave it unset)")
     if choice == "ddfast" and ddfast is None:
         raise _ddfast_error
-    if choice == "dds3" or ddfast is None:
-        return "dds3"
-    return "ddfast"
+    if choice == "bsolver":
+        path = find_library()
+        if path is None:
+            raise ImportError("BEN_DDS=bsolver, but there is no bridge-solver library for this "
+                              "platform under bin/bsolver/ (or set BEN_BSOLVER_LIB)")
+        return "bsolver", path
+    if choice == "dds3":
+        return "dds3", None
+    if ddfast is not None:
+        return "ddfast", None
+    path = find_library()
+    return ("bsolver", path) if path else ("dds3", None)
 
 
-BACKEND = _choose_backend()
+BACKEND, _BSOLVER_PATH = _choose_backend()
 dds3 = _load_dds3() if BACKEND == "dds3" else None
 
 
@@ -356,6 +372,35 @@ class _DDS3Backend:
         return dds3.calc_all_tables_pbn([deal], mode=vulnerable)
 
 
+class _BSolverBackend:
+    """A batch is one SolveAllBoards call: bridge-solver solves the boards on its own threads
+    (one global setting of the library BEN loads, see bsolver.py)."""
+
+    def __init__(self, max_threads, verbose):
+        from ddsolver.bsolver import BridgeSolver
+        self.workers = max_threads if (max_threads and max_threads > 0) else _available_cpus()
+        self._bs = BridgeSolver(_BSOLVER_PATH, self.workers)
+        # Under gevent: a few native threads so concurrent requests can each have a batch in flight.
+        self._gevent_pool = _NativeThreadPoolExecutor(max_workers=4) if _GEVENT else None
+
+    def version(self):
+        return "bridge-solver"
+
+    def _call(self, fn, *args):
+        if self._gevent_pool is not None:
+            return self._gevent_pool.submit(fn, *args).result()
+        return fn(*args)
+
+    def solve_boards(self, hands_pbn, trump, first, trick_suit, trick_rank, solutions, mode):
+        return self._call(self._bs.solve_boards, list(hands_pbn), trump, first, list(trick_suit),
+                          list(trick_rank), solutions, mode)
+
+    def par_table(self, deal, vulnerable):
+        # dds3's calc_all_tables_pbn shape, with only the par scores DDSolver reads.
+        ns_par, ew_par = self._call(self._bs.par, deal, vulnerable)
+        return {"par_results": [{"par_score": [ns_par, ew_par]}]}
+
+
 # ---------------------------------------------------------------------------------------------
 
 
@@ -371,6 +416,8 @@ class DDSolver:
         # max_threads: threads a batch is solved on. 0 = one per CPU.
         if BACKEND == "ddfast":
             self._backend = _DDFastBackend(max_threads, verbose)
+        elif BACKEND == "bsolver":
+            self._backend = _BSolverBackend(max_threads, verbose)
         else:
             self._backend = _DDS3Backend(max_threads, verbose)
         self._workers = self._backend.workers

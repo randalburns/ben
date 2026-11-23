@@ -46,13 +46,18 @@ def get_session_options():
     return sess_options
 
 
+_cuda_unusable = False     # set when a CUDA session fell back to the CPU: no usable GPU in this process
+
+
 def _use_cuda():
     """BEN_ONNX_DEVICE=cuda|cpu picks the device; unset, CUDA when onnxruntime-gpu
-    is installed and CUDA_VISIBLE_DEVICES does not hide the GPU (-1)."""
+    is installed and CUDA_VISIBLE_DEVICES does not hide the GPU (set to -1 or to
+    nothing, as CUDA reads it)."""
     choice = os.getenv('BEN_ONNX_DEVICE', '').strip().lower()
     if choice not in ('', 'cuda', 'cpu'):
         raise ValueError(f"BEN_ONNX_DEVICE={choice!r}: use 'cuda' or 'cpu' (or leave it unset)")
-    if choice == 'cpu' or os.getenv('CUDA_VISIBLE_DEVICES') == '-1':
+    visible = os.getenv('CUDA_VISIBLE_DEVICES')
+    if choice == 'cpu' or _cuda_unusable or (visible is not None and visible.strip() in ('', '-1')):
         return False
     return 'CUDAExecutionProvider' in ort.get_available_providers()
 
@@ -208,6 +213,7 @@ def _model_source(model_path):
 
 
 def _new_session(source, label):
+    global _cuda_unusable
     if _use_cuda() and _prepare_cuda():
         try:
             options = get_session_options()
@@ -217,8 +223,14 @@ def _new_session(source, label):
             session = ort.InferenceSession(source, options,
                                            providers=[('CUDAExecutionProvider', _CUDA_OPTIONS),
                                                       'CPUExecutionProvider'])
-            shrink_above = None if shared else _SHRINK_ABOVE.get(_GPU_ARENA, 0)
-            return _ChunkedSession(session, _GPU_CHUNK_VALUES, shrink_above)
+            if 'CUDAExecutionProvider' in session.get_providers():
+                shrink_above = None if shared else _SHRINK_ABOVE.get(_GPU_ARENA, 0)
+                return _ChunkedSession(session, _GPU_CHUNK_VALUES, shrink_above)
+            # ONNX Runtime fell back to the CPU (no usable GPU). The GPU arena options
+            # would fail on every run there, so build a plain CPU session, and do not
+            # try CUDA again in this process.
+            _cuda_unusable = True
+            sys.stderr.write(f"ONNX Runtime: no usable GPU for {label}; using the CPU\n")
         except Exception as ex:
             sys.stderr.write(f"ONNX Runtime: CUDA session for {label} failed ({ex}); using the CPU\n")
     return ort.InferenceSession(source, get_session_options(),
